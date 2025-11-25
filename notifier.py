@@ -2,7 +2,7 @@
 Telegram notification service for Realtor scraper
 
 - XLSX: Contains ALL listings scraped
-- Telegram messages: Only NEW septic/well listings from past 24h
+- Telegram messages: Only NEW septic/well listings first seen after yesterday's 2am
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ from __future__ import annotations
 import io
 import os
 import logging
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
 import pandas as pd  # type: ignore
@@ -87,6 +87,50 @@ def _get_target_chat_ids() -> list[dict]:
     return users
 
 
+def _get_yesterday_2am() -> datetime:
+    """
+    Get yesterday's 2am UTC timestamp.
+    Only listings first_seen_at after this time are considered "new" for notifications.
+    """
+    now = datetime.now(timezone.utc)
+    today_2am = now.replace(hour=2, minute=0, second=0, microsecond=0)
+
+    # If current time is before 2am, "yesterday's 2am" is 2 days ago
+    # If current time is after 2am, "yesterday's 2am" is 1 day ago
+    if now < today_2am:
+        return today_2am - timedelta(days=2)
+    else:
+        return today_2am - timedelta(days=1)
+
+
+def _filter_new_listings(listings: list[Listing]) -> list[Listing]:
+    """
+    Filter listings to only include those first seen after yesterday's 2am.
+    This ensures we only notify about truly new listings, not backfilled historical data.
+    """
+    cutoff = _get_yesterday_2am()
+    filtered = []
+
+    for listing in listings:
+        if listing.first_seen_at:
+            # Handle both timezone-aware and naive datetimes
+            first_seen = listing.first_seen_at
+            if first_seen.tzinfo is None:
+                first_seen = first_seen.replace(tzinfo=timezone.utc)
+
+            if first_seen >= cutoff:
+                filtered.append(listing)
+        else:
+            # If no first_seen_at, include it to be safe
+            filtered.append(listing)
+
+    logger.info(
+        f"Filtered listings for notification: {len(filtered)}/{len(listings)} "
+        f"(cutoff: {cutoff.isoformat()})"
+    )
+    return filtered
+
+
 async def send_scrape_report(
     stats: ScraperStats,
     all_listings: list[Listing],
@@ -94,7 +138,7 @@ async def send_scrape_report(
 ) -> None:
     """
     Send complete scrape report to all registered Telegram users:
-    - Telegram message with NEW septic/well listings only
+    - Telegram message with NEW septic/well listings only (first seen after yesterday's 2am)
     - XLSX attachment with ALL listings
 
     Args:
@@ -111,6 +155,9 @@ async def send_scrape_report(
     if not target_users:
         logger.warning("No target users for notifications")
         return
+
+    # Filter to only truly new listings (first seen after yesterday's 2am)
+    new_septic_well_listings = _filter_new_listings(new_septic_well_listings)
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
 
