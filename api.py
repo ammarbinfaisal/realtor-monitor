@@ -247,8 +247,14 @@ async def poll_for_updates():
 async def startup_event():
     """Initialize on startup"""
     logger.info("Starting API server...")
-    db.init_database()
-    asyncio.create_task(poll_for_updates())
+    try:
+        db.init_database()
+        asyncio.create_task(poll_for_updates())
+        logger.info("Database initialized, polling started")
+    except Exception as e:
+        logger.error(f"Failed to initialize database: {e}")
+        logger.error("Make sure DATABASE_URL environment variable is set correctly")
+        raise
 
 
 # === Serve Frontend ===

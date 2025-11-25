@@ -18,13 +18,29 @@ from models import Listing, Agent, DbStats
 
 logger = logging.getLogger(__name__)
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "")
+
+def get_database_url() -> str:
+    """Get DATABASE_URL with validation"""
+    url = os.environ.get("DATABASE_URL", "")
+
+    if not url:
+        raise RuntimeError(
+            "DATABASE_URL environment variable is not set. "
+            "Please set it to your PostgreSQL connection string."
+        )
+
+    # Railway uses postgres:// but psycopg2 needs postgresql://
+    if url.startswith("postgres://"):
+        url = url.replace("postgres://", "postgresql://", 1)
+
+    return url
 
 
 @contextmanager
 def get_connection():
     """Get database connection with automatic cleanup"""
-    conn = psycopg2.connect(DATABASE_URL, cursor_factory=RealDictCursor)
+    url = get_database_url()
+    conn = psycopg2.connect(url, cursor_factory=RealDictCursor)
     try:
         yield conn
     finally:
