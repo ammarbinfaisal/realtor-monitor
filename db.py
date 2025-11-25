@@ -230,12 +230,6 @@ def get_listings(
             query += " AND first_seen_at <= %s"
             params.append(date_to)
 
-        if septic_only:
-            query += " AND has_septic_system = true"
-
-        if well_only:
-            query += " AND has_private_well = true"
-
         if city:
             query += " AND city = %s"
             params.append(city)
@@ -257,7 +251,8 @@ def get_listings(
                 # Combine with OR
                 query += f" AND ({' OR '.join(search_conditions)})"
 
-        query += " ORDER BY first_seen_at DESC LIMIT %s"
+        # Always sort listings with septic/well = Yes to the top
+        query += " ORDER BY (CASE WHEN has_septic_system OR has_private_well THEN 1 ELSE 0 END) DESC, first_seen_at DESC LIMIT %s"
         params.append(limit)
 
         cursor.execute(query, params)
