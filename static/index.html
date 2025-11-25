@@ -81,6 +81,27 @@
     <!-- Filters -->
     <div class="bg-white rounded-lg shadow p-4 mb-6">
       <div class="flex flex-wrap gap-4 items-center">
+        <!-- Date Preset -->
+        <select x-model="filters.datePreset" class="border rounded-lg px-3 py-2">
+          <option value="">All Time</option>
+          <option value="past_24h">Past 24 Hours</option>
+          <option value="past_week">Past Week</option>
+          <option value="past_month">Past Month</option>
+          <option value="past_3months">Past 3 Months</option>
+          <option value="custom">Custom Range</option>
+        </select>
+        
+        <!-- Custom Date Range (shown when custom is selected) -->
+        <template x-if="filters.datePreset === 'custom'">
+          <div class="flex items-center gap-2">
+            <input type="date" x-model="filters.dateFrom" 
+                   class="border rounded-lg px-3 py-2" placeholder="From">
+            <span class="text-gray-500">to</span>
+            <input type="date" x-model="filters.dateTo" 
+                   class="border rounded-lg px-3 py-2" placeholder="To">
+          </div>
+        </template>
+        
         <label class="flex items-center">
           <input type="checkbox" x-model="filters.septicOnly" class="mr-2 h-4 w-4 text-blue-600">
           <span>Septic Only</span>
@@ -95,13 +116,17 @@
             <option :value="city" x-text="city"></option>
           </template>
         </select>
-        <input type="text" x-model="filters.search" placeholder="Search address..." 
-               class="border rounded-lg px-3 py-2 w-48">
+        <input type="text" x-model="filters.search" placeholder="Search... (use | for OR)" 
+               class="border rounded-lg px-3 py-2 w-56"
+               title="Search address, city, county. Use | for OR matching (e.g. madison|milwaukee)">
         <button @click="refreshListings()" 
                 class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
           Refresh
         </button>
       </div>
+      <p class="text-xs text-gray-500 mt-2">
+        Tip: Use | in search for OR matching (e.g. "madison|milwaukee" or "septic|well")
+      </p>
     </div>
 
     <!-- Listings Table -->
@@ -197,8 +222,11 @@
         stats: {},
         cities: [],
         filters: {
-          septicOnly: true,
-          wellOnly: true,
+          datePreset: '',
+          dateFrom: '',
+          dateTo: '',
+          septicOnly: false,
+          wellOnly: false,
           city: '',
           search: ''
         },
@@ -210,6 +238,41 @@
 
         async init() {
           await this.fetchData();
+          
+          // Watch for filter changes and auto-refresh (with debounce)
+          this.$watch('filters', () => {
+            clearTimeout(this._filterDebounce);
+            this._filterDebounce = setTimeout(() => {
+              this.fetchData();
+            }, 500); // 500ms debounce
+          });
+        },
+        
+        _filterDebounce: null,
+
+        buildListingsUrl() {
+          const params = new URLSearchParams();
+          params.set('limit', '1000');
+          
+          // Date filtering
+          if (this.filters.datePreset && this.filters.datePreset !== 'custom') {
+            params.set('date_preset', this.filters.datePreset);
+          } else if (this.filters.datePreset === 'custom') {
+            if (this.filters.dateFrom) params.set('date_from', this.filters.dateFrom);
+            if (this.filters.dateTo) params.set('date_to', this.filters.dateTo);
+          }
+          
+          // Septic/Well filtering (server-side)
+          if (this.filters.septicOnly) params.set('septic', 'true');
+          if (this.filters.wellOnly) params.set('well', 'true');
+          
+          // City filtering (server-side)
+          if (this.filters.city) params.set('city', this.filters.city);
+          
+          // Search filtering (server-side with | OR support)
+          if (this.filters.search) params.set('search', this.filters.search);
+          
+          return `${API_URL}/api/listings?${params.toString()}`;
         },
 
         async fetchData() {
@@ -220,7 +283,7 @@
             // Fetch all data in parallel
             const [statsRes, listingsRes, citiesRes] = await Promise.all([
               this.fetchWithTimeout(`${API_URL}/api/stats`, 30000),
-              this.fetchWithTimeout(`${API_URL}/api/listings?limit=500`, 30000),
+              this.fetchWithTimeout(this.buildListingsUrl(), 30000),
               this.fetchWithTimeout(`${API_URL}/api/cities`, 30000)
             ]);
             
@@ -270,22 +333,9 @@
         },
 
         get filteredListings() {
-          return this.listings.filter(l => {
-            // Septic filter
-            if (this.filters.septicOnly && !l.has_septic_system) return false;
-            // Well filter
-            if (this.filters.wellOnly && !l.has_private_well) return false;
-            // City filter
-            if (this.filters.city && l.city !== this.filters.city) return false;
-            // Search filter
-            if (this.filters.search) {
-              const search = this.filters.search.toLowerCase();
-              const address = (l.address || '').toLowerCase();
-              const city = (l.city || '').toLowerCase();
-              if (!address.includes(search) && !city.includes(search)) return false;
-            }
-            return true;
-          });
+          // Since we're using server-side filtering, just return all listings
+          // The server already filtered based on our query params
+          return this.listings;
         },
 
         formatPrice(price) {

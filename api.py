@@ -96,9 +96,21 @@ async def get_listings(
     since: Optional[str] = Query(
         None, description="ISO timestamp - get listings updated after this time"
     ),
+    date_from: Optional[str] = Query(
+        None, description="Filter listings from this date (YYYY-MM-DD)"
+    ),
+    date_to: Optional[str] = Query(
+        None, description="Filter listings until this date (YYYY-MM-DD)"
+    ),
+    date_preset: Optional[str] = Query(
+        None, description="Date preset: past_24h, past_week, past_month, past_3months"
+    ),
     septic: bool = Query(False, description="Filter to septic system only"),
     well: bool = Query(False, description="Filter to private well only"),
     city: Optional[str] = Query(None, description="Filter by city"),
+    search: Optional[str] = Query(
+        None, description="Search query - supports | for OR matching"
+    ),
     limit: int = Query(100, le=1000, description="Max results"),
 ) -> dict:
     """Get listings with optional filters"""
@@ -109,8 +121,49 @@ async def get_listings(
         except ValueError:
             raise HTTPException(400, "Invalid 'since' timestamp format")
 
+    # Parse date filters
+    date_from_dt = None
+    date_to_dt = None
+
+    # Handle date preset
+    if date_preset:
+        now = datetime.utcnow()
+        if date_preset == "past_24h":
+            date_from_dt = now - timedelta(hours=24)
+        elif date_preset == "past_week":
+            date_from_dt = now - timedelta(days=7)
+        elif date_preset == "past_month":
+            date_from_dt = now - timedelta(days=30)
+        elif date_preset == "past_3months":
+            date_from_dt = now - timedelta(days=90)
+        else:
+            raise HTTPException(400, f"Invalid date_preset: {date_preset}")
+
+    # Parse explicit date_from/date_to (overrides preset if both provided)
+    if date_from:
+        try:
+            date_from_dt = datetime.fromisoformat(date_from)
+        except ValueError:
+            raise HTTPException(400, "Invalid 'date_from' format. Use YYYY-MM-DD")
+
+    if date_to:
+        try:
+            # End of day for date_to
+            date_to_dt = datetime.fromisoformat(date_to).replace(
+                hour=23, minute=59, second=59
+            )
+        except ValueError:
+            raise HTTPException(400, "Invalid 'date_to' format. Use YYYY-MM-DD")
+
     listings = db.get_listings(
-        since=since_dt, septic_only=septic, well_only=well, city=city, limit=limit
+        since=since_dt,
+        date_from=date_from_dt,
+        date_to=date_to_dt,
+        septic_only=septic,
+        well_only=well,
+        city=city,
+        search=search,
+        limit=limit,
     )
 
     return {

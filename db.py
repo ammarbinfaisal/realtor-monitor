@@ -192,12 +192,26 @@ def save_listing(listing: Listing) -> tuple[bool, Listing]:
 
 def get_listings(
     since: Optional[datetime] = None,
+    date_from: Optional[datetime] = None,
+    date_to: Optional[datetime] = None,
     septic_only: bool = False,
     well_only: bool = False,
     city: Optional[str] = None,
+    search: Optional[str] = None,
     limit: int = 100,
 ) -> list[Listing]:
-    """Get listings with optional filters"""
+    """Get listings with optional filters
+
+    Args:
+        since: Get listings updated after this time (last_seen_at)
+        date_from: Get listings first seen after this date
+        date_to: Get listings first seen before this date
+        septic_only: Filter to septic system only
+        well_only: Filter to private well only
+        city: Filter by city
+        search: Search query - supports | for OR matching (partial match on address, city, county)
+        limit: Max results
+    """
     with get_connection() as conn:
         cursor = conn.cursor()
 
@@ -207,6 +221,14 @@ def get_listings(
         if since:
             query += " AND last_seen_at > %s"
             params.append(since)
+
+        if date_from:
+            query += " AND first_seen_at >= %s"
+            params.append(date_from)
+
+        if date_to:
+            query += " AND first_seen_at <= %s"
+            params.append(date_to)
 
         if septic_only:
             query += " AND has_septic_system = true"
@@ -218,7 +240,24 @@ def get_listings(
             query += " AND city = %s"
             params.append(city)
 
-        query += " ORDER BY last_seen_at DESC LIMIT %s"
+        # Handle search with OR operator support
+        if search:
+            # Split by | for OR matching
+            search_terms = [term.strip() for term in search.split("|") if term.strip()]
+            if search_terms:
+                search_conditions = []
+                for term in search_terms:
+                    # Each term does a partial match on address, city, or county
+                    search_conditions.append(
+                        "(LOWER(address) LIKE %s OR LOWER(city) LIKE %s OR LOWER(county) LIKE %s)"
+                    )
+                    like_pattern = f"%{term.lower()}%"
+                    params.extend([like_pattern, like_pattern, like_pattern])
+
+                # Combine with OR
+                query += f" AND ({' OR '.join(search_conditions)})"
+
+        query += " ORDER BY first_seen_at DESC LIMIT %s"
         params.append(limit)
 
         cursor.execute(query, params)
