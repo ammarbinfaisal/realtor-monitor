@@ -25,15 +25,23 @@
         <p class="text-sm text-gray-500">Septic & Well Properties</p>
       </div>
       <div class="flex items-center space-x-4">
-        <!-- Connection status -->
+        <!-- API status -->
         <div class="flex items-center">
-          <span x-show="wsConnected" class="flex items-center text-green-600">
-            <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
-            Live
+          <span x-show="apiStatus === 'online'" class="flex items-center text-green-600">
+            <span class="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+            Online
           </span>
-          <span x-show="!wsConnected" class="flex items-center text-red-600">
+          <span x-show="apiStatus === 'connecting'" class="flex items-center text-yellow-600">
+            <span class="w-2 h-2 bg-yellow-500 rounded-full mr-2 animate-pulse"></span>
+            Connecting...
+          </span>
+          <span x-show="apiStatus === 'cold-start'" class="flex items-center text-yellow-600">
+            <span class="w-2 h-2 bg-yellow-500 rounded-full mr-2 animate-pulse"></span>
+            Starting API...
+          </span>
+          <span x-show="apiStatus === 'offline'" class="flex items-center text-red-600">
             <span class="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
-            Disconnected
+            Offline
           </span>
         </div>
         <!-- Export button -->
@@ -176,9 +184,10 @@
   </div>
 
   <script>
-    // Get API URL - use relative path or configure based on environment
-    const API_URL = window.location.origin;
-    const WS_URL = API_URL.replace('http', 'ws');
+    // API URL - configure this for your Railway deployment
+    // When hosted on Cloudflare Pages, set this to your Railway API URL
+    // Example: 'https://your-app.up.railway.app'
+    const API_URL = window.API_URL || window.location.origin;
 
     function listingsApp() {
       return {
@@ -192,105 +201,69 @@
           search: ''
         },
         loading: true,
-        wsConnected: false,
-        ws: null,
+        apiStatus: 'connecting', // 'connecting', 'online', 'offline', 'cold-start'
         toasts: [],
         toastId: 0,
         lastUpdate: '-',
 
         async init() {
-          await this.fetchStats();
-          await this.fetchListings();
-          await this.fetchCities();
-          this.connectWebSocket();
+          await this.fetchData();
         },
 
-        async fetchStats() {
-          try {
-            const res = await fetch(`${API_URL}/api/stats`);
-            this.stats = await res.json();
-          } catch (e) {
-            console.error('Failed to fetch stats:', e);
-          }
-        },
-
-        async fetchListings() {
+        async fetchData() {
           this.loading = true;
+          this.apiStatus = 'connecting';
+          
           try {
-            // Always fetch listings that have septic OR well
-            const res = await fetch(`${API_URL}/api/listings?limit=500`);
-            const data = await res.json();
-            this.listings = data.listings;
+            // Fetch all data in parallel
+            const [statsRes, listingsRes, citiesRes] = await Promise.all([
+              this.fetchWithTimeout(`${API_URL}/api/stats`, 30000),
+              this.fetchWithTimeout(`${API_URL}/api/listings?limit=500`, 30000),
+              this.fetchWithTimeout(`${API_URL}/api/cities`, 30000)
+            ]);
+            
+            this.stats = await statsRes.json();
+            const listingsData = await listingsRes.json();
+            this.listings = listingsData.listings;
+            const citiesData = await citiesRes.json();
+            this.cities = citiesData.cities;
+            
             this.lastUpdate = new Date().toLocaleTimeString();
+            this.apiStatus = 'online';
           } catch (e) {
-            console.error('Failed to fetch listings:', e);
+            console.error('Failed to fetch data:', e);
+            this.apiStatus = 'offline';
+            this.showToast('Failed to connect to API. Click Refresh to retry.');
           }
           this.loading = false;
         },
 
-        async fetchCities() {
+        async fetchWithTimeout(url, timeout = 30000) {
+          const controller = new AbortController();
+          const timeoutId = setTimeout(() => controller.abort(), timeout);
+          
           try {
-            const res = await fetch(`${API_URL}/api/cities`);
-            const data = await res.json();
-            this.cities = data.cities;
+            // Show cold-start message after 3 seconds
+            const coldStartTimer = setTimeout(() => {
+              if (this.apiStatus === 'connecting') {
+                this.apiStatus = 'cold-start';
+              }
+            }, 3000);
+            
+            const response = await fetch(url, { signal: controller.signal });
+            clearTimeout(coldStartTimer);
+            clearTimeout(timeoutId);
+            return response;
           } catch (e) {
-            console.error('Failed to fetch cities:', e);
+            clearTimeout(timeoutId);
+            throw e;
           }
         },
 
         async refreshListings() {
-          await this.fetchStats();
-          await this.fetchListings();
-          this.showToast('Listings refreshed');
-        },
-
-        connectWebSocket() {
-          try {
-            this.ws = new WebSocket(`${WS_URL}/ws`);
-            
-            this.ws.onopen = () => {
-              this.wsConnected = true;
-              console.log('WebSocket connected');
-            };
-            
-            this.ws.onclose = () => {
-              this.wsConnected = false;
-              console.log('WebSocket disconnected, reconnecting...');
-              setTimeout(() => this.connectWebSocket(), 5000);
-            };
-            
-            this.ws.onerror = (e) => {
-              console.error('WebSocket error:', e);
-            };
-            
-            this.ws.onmessage = (event) => {
-              const data = JSON.parse(event.data);
-              this.handleWsMessage(data);
-            };
-          } catch (e) {
-            console.error('WebSocket connection failed:', e);
-            setTimeout(() => this.connectWebSocket(), 5000);
-          }
-        },
-
-        handleWsMessage(data) {
-          console.log('WS message:', data.type);
-          
-          if (data.type === 'connected') {
-            if (data.stats) this.stats = data.stats;
-          }
-          else if (data.type === 'new_listings' || data.type === 'update') {
-            // New listings found
-            if (data.count > 0) {
-              this.showToast(`${data.count} new listing(s) found!`);
-              this.refreshListings();
-            }
-          }
-          else if (data.type === 'ping') {
-            // Respond to ping
-            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-              this.ws.send('pong');
-            }
+          await this.fetchData();
+          if (this.apiStatus === 'online') {
+            this.showToast('Listings refreshed');
           }
         },
 

@@ -1,4 +1,4 @@
-# Railway config for API service (always running)
+# Railway config for API service (scale-to-zero enabled)
 # Rename to railway.toml when deploying the API service
 
 [build]
@@ -11,3 +11,6 @@ healthcheckPath = "/api/health"
 healthcheckTimeout = 30
 restartPolicyType = "ON_FAILURE"
 restartPolicyMaxRetries = 3
+# To enable scale-to-zero (Serverless), go to Railway dashboard:
+# Service Settings > Deploy > Enable "Serverless" toggle
+# This will stop the service after 10 mins of no traffic and wake on first request
