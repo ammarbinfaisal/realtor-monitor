@@ -61,7 +61,7 @@ async def run_scraper():
             logger.info(f"Searching county: {county_name}, WI")
             county_listings = scraper.search_listings_api(
                 state_code="WI",
-                limit=500,
+                limit=200,  # API max is 200
                 days_old=1,  # Past 24 hours
                 county=county_name,
             )

@@ -564,7 +564,7 @@ class RealtorScraperCurl:
     def search_listings_api(
         self,
         state_code: str = "WI",
-        limit: int = 1000,
+        limit: int = 200,
         offset: int = 0,
         days_old: Optional[int] = None,
         location: Optional[str] = None,
@@ -574,12 +574,16 @@ class RealtorScraperCurl:
 
         Args:
             state_code: State to search (default: WI)
-            limit: Number of listings to fetch
+            limit: Number of listings to fetch (max 200 per API constraints)
             offset: Pagination offset
             days_old: Only get listings from the past N days (None = no filter)
             location: Location string to filter by (e.g., "Kenosha, WI")
             county: County name to filter by (e.g., "Kenosha")
         """
+        # API enforces max limit of 200
+        if limit > 200:
+            logger.warning(f"Limit {limit} exceeds API max of 200, capping to 200")
+            limit = 200
 
         # Build query parameters
         query_params = {
