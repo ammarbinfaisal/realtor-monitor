@@ -231,11 +231,17 @@ def _verify_scraper_secret(secret: Optional[str]) -> None:
 
 
 @app.post("/api/scraper/trigger")
-async def trigger_scraper(secret: str = Query(..., description="Scraper secret token")):
+async def trigger_scraper(
+    secret: str = Query(..., description="Scraper secret token"),
+    days: int = Query(7, le=14, description="Number of days to look back (default: 7)"),
+):
     """
     Manually trigger the scraper.
     Requires secret token for authorization.
     Runs in background and returns immediately.
+
+    By default, looks back 7 days but only marks listings from the past 24 hours
+    (between 2am yesterday and 2am today) as "new" for notifications.
     """
     _verify_scraper_secret(secret)
 
@@ -251,7 +257,8 @@ async def trigger_scraper(secret: str = Query(..., description="Scraper secret t
             # Import here to avoid circular imports
             from run_scraper import run_scraper
 
-            await run_scraper()
+            # Run with 7-day lookback but only mark 24h window as new
+            await run_scraper(days_old=days, mark_new_within_24h=True)
         except Exception as e:
             logger.error(f"Scraper failed: {e}")
         finally:
@@ -262,15 +269,11 @@ async def trigger_scraper(secret: str = Query(..., description="Scraper secret t
 
     return {
         "status": "started",
-        "message": "Scraper triggered, running in background",
+        "message": f"Scraper triggered with {days}-day lookback, running in background",
+        "days_lookback": days,
+        "note": "Only listings from past 24h (2am-2am window) will be marked as new",
         "timestamp": datetime.utcnow().isoformat(),
     }
-
-
-@app.get("/api/scraper/status")
-async def get_scraper_status():
-    """Check if scraper is currently running"""
-    return {"running": _scraper_running, "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/api/scraper/status")

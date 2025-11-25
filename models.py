@@ -30,6 +30,7 @@ class Listing:
     property_id: Optional[str] = None
     address: Optional[str] = None
     city: Optional[str] = None
+    county: Optional[str] = None
     state_code: Optional[str] = None
     postal_code: Optional[str] = None
     price: Optional[int] = None
@@ -83,6 +84,7 @@ class Listing:
             property_id=data.get("property_id"),
             address=data.get("address"),
             city=data.get("city"),
+            county=data.get("county"),
             state_code=data.get("state_code"),
             postal_code=data.get("postal_code"),
             price=data.get("price"),

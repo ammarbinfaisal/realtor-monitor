@@ -71,6 +71,7 @@ def init_database():
                 property_id TEXT,
                 address TEXT,
                 city TEXT,
+                county TEXT,
                 state_code TEXT,
                 postal_code TEXT,
                 price INTEGER,
@@ -113,6 +114,14 @@ def init_database():
             CREATE INDEX IF NOT EXISTS idx_listings_first_seen 
             ON listings(first_seen_at DESC)
         """)
+
+        # Migration: Add county column if it doesn't exist
+        try:
+            cursor.execute("ALTER TABLE listings ADD COLUMN county TEXT")
+            logger.info("Added county column to listings table")
+        except Exception:
+            # Column already exists
+            pass
 
         conn.commit()
         logger.info("Database initialized successfully")
@@ -207,11 +216,11 @@ def save_listing(listing: Listing) -> tuple[bool, Listing]:
             cursor.execute(
                 """
                 INSERT INTO listings
-                (listing_url, property_id, address, city, state_code, postal_code,
+                (listing_url, property_id, address, city, county, state_code, postal_code,
                  price, beds, baths, sqft, list_date,
                  has_septic_system, has_private_well, septic_mentions, well_mentions,
                  agent_url, agent_name, agent_phone, brokerage_name)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING *
             """,
                 (
@@ -219,6 +228,7 @@ def save_listing(listing: Listing) -> tuple[bool, Listing]:
                     listing.property_id,
                     listing.address,
                     listing.city,
+                    listing.county,
                     listing.state_code,
                     listing.postal_code,
                     listing.price,

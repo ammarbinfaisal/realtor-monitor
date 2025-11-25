@@ -1187,6 +1187,7 @@ class RealtorScraperCurl:
             "property_id": None,
             "address": None,
             "city": None,
+            "county": None,
             "state_code": None,
             "postal_code": None,
             "price": None,
@@ -1260,6 +1261,12 @@ class RealtorScraperCurl:
             return basic_result
 
         result = basic_result.copy()
+
+        # Extract county from location data
+        location = property_data.get("location", {})
+        county_data = location.get("county", {})
+        if county_data and isinstance(county_data, dict):
+            result["county"] = county_data.get("name")
 
         # Check for septic/well in details
         septic_well_info = self.check_property_for_septic_well(property_data)
