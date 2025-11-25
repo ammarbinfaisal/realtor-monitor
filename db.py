@@ -15,6 +15,7 @@ import psycopg2  # type: ignore
 from psycopg2.extras import RealDictCursor, Json  # type: ignore
 
 from models import Listing, Agent, DbStats
+from migrations.runner import run_migrations
 
 logger = logging.getLogger(__name__)
 
@@ -48,83 +49,17 @@ def get_connection():
 
 
 def init_database():
-    """Initialize PostgreSQL database with required tables"""
+    """Initialize PostgreSQL database - runs migrations"""
     logger.info("Initializing PostgreSQL database...")
 
-    with get_connection() as conn:
-        cursor = conn.cursor()
-
-        # Agents table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS agents (
-                agent_url TEXT PRIMARY KEY,
-                agent_name TEXT,
-                agent_phone TEXT,
-                fetched_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
-
-        # Listings table
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS listings (
-                listing_url TEXT PRIMARY KEY,
-                property_id TEXT,
-                address TEXT,
-                city TEXT,
-                county TEXT,
-                state_code TEXT,
-                postal_code TEXT,
-                price INTEGER,
-                beds INTEGER,
-                baths REAL,
-                sqft INTEGER,
-                list_date TEXT,
-                has_septic_system BOOLEAN DEFAULT FALSE,
-                has_private_well BOOLEAN DEFAULT FALSE,
-                septic_mentions JSONB DEFAULT '[]'::jsonb,
-                well_mentions JSONB DEFAULT '[]'::jsonb,
-                agent_url TEXT,
-                agent_name TEXT,
-                agent_phone TEXT,
-                brokerage_name TEXT,
-                first_seen_at TIMESTAMP DEFAULT NOW(),
-                last_seen_at TIMESTAMP DEFAULT NOW(),
-                times_seen INTEGER DEFAULT 1,
-                scraped_at TIMESTAMP DEFAULT NOW()
-            )
-        """)
-
-        # Indexes for common queries
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_listings_last_seen 
-            ON listings(last_seen_at DESC)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_listings_septic_well 
-            ON listings(has_septic_system, has_private_well)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_listings_city 
-            ON listings(city)
-        """)
-
-        cursor.execute("""
-            CREATE INDEX IF NOT EXISTS idx_listings_first_seen 
-            ON listings(first_seen_at DESC)
-        """)
-
-        # Migration: Add county column if it doesn't exist
-        try:
-            cursor.execute("ALTER TABLE listings ADD COLUMN county TEXT")
-            logger.info("Added county column to listings table")
-        except Exception:
-            # Column already exists
-            pass
-
-        conn.commit()
+    url = get_database_url()
+    # Use a regular cursor for migrations (not RealDictCursor)
+    conn = psycopg2.connect(url)
+    try:
+        run_migrations(conn)
         logger.info("Database initialized successfully")
+    finally:
+        conn.close()
 
 
 def get_cached_agent(agent_url: str) -> Optional[Agent]:
@@ -326,23 +261,27 @@ def get_stats() -> DbStats:
         cursor = conn.cursor()
 
         cursor.execute("SELECT COUNT(*) as total FROM listings")
-        total = cursor.fetchone()["total"]
+        row = cursor.fetchone()
+        total = row["total"] if row else 0
 
         cursor.execute(
             "SELECT COUNT(*) as count FROM listings WHERE has_septic_system = true"
         )
-        septic = cursor.fetchone()["count"]
+        row = cursor.fetchone()
+        septic = row["count"] if row else 0
 
         cursor.execute(
             "SELECT COUNT(*) as count FROM listings WHERE has_private_well = true"
         )
-        well = cursor.fetchone()["count"]
+        row = cursor.fetchone()
+        well = row["count"] if row else 0
 
         cursor.execute("""
             SELECT COUNT(*) as count FROM listings 
             WHERE first_seen_at > NOW() - INTERVAL '24 hours'
         """)
-        new_24h = cursor.fetchone()["count"]
+        row = cursor.fetchone()
+        new_24h = row["count"] if row else 0
 
         return DbStats(
             total_listings=total,

@@ -5,6 +5,9 @@ beautifulsoup4>=4.12.0
 # Database
 psycopg2-binary>=2.9.0
 
+# Models
+pydantic>=2.0.0
+
 # API
 fastapi>=0.109.0
 uvicorn[standard]>=0.27.0

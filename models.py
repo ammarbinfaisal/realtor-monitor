@@ -1,16 +1,16 @@
 """
-Data models for Realtor scraper
+Data models for Realtor scraper - Pydantic v2
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, asdict
 from datetime import datetime
 from typing import Optional
 
+from pydantic import BaseModel, Field, computed_field
 
-@dataclass
-class Agent:
+
+class Agent(BaseModel):
     """Agent information"""
 
     agent_url: str
@@ -18,12 +18,10 @@ class Agent:
     agent_phone: Optional[str] = None
     fetched_at: Optional[datetime] = None
 
-    def to_dict(self) -> dict:
-        return {k: v for k, v in asdict(self).items() if v is not None}
+    model_config = {"from_attributes": True}
 
 
-@dataclass
-class Listing:
+class Listing(BaseModel):
     """Real estate listing"""
 
     listing_url: str
@@ -40,8 +38,8 @@ class Listing:
     list_date: Optional[str] = None
     has_septic_system: bool = False
     has_private_well: bool = False
-    septic_mentions: list[str] = field(default_factory=list)
-    well_mentions: list[str] = field(default_factory=list)
+    septic_mentions: list[str] = Field(default_factory=list)
+    well_mentions: list[str] = Field(default_factory=list)
     agent_url: Optional[str] = None
     agent_name: Optional[str] = None
     agent_phone: Optional[str] = None
@@ -51,22 +49,27 @@ class Listing:
     times_seen: int = 1
     scraped_at: Optional[datetime] = None
 
-    # Alias for compatibility
+    model_config = {"from_attributes": True}
+
+    # Aliases for compatibility
+    @computed_field
     @property
     def url(self) -> str:
         return self.listing_url
 
+    @computed_field
     @property
     def has_septic(self) -> bool:
         return self.has_septic_system
 
+    @computed_field
     @property
     def has_well(self) -> bool:
         return self.has_private_well
 
     def to_dict(self) -> dict:
         """Convert to dictionary, handling datetime serialization"""
-        data = asdict(self)
+        data = self.model_dump(exclude={"url", "has_septic", "has_well"})
         # Convert datetime to ISO string for JSON serialization
         for key, value in data.items():
             if isinstance(value, datetime):
@@ -114,8 +117,7 @@ class Listing:
         return cls.from_dict(row)
 
 
-@dataclass
-class ScraperStats:
+class ScraperStats(BaseModel):
     """Statistics from a scraper run"""
 
     total_processed: int = 0
@@ -123,10 +125,13 @@ class ScraperStats:
     updated_listings: int = 0
     septic_well_count: int = 0
     skipped_count: int = 0
-    errors: list[str] = field(default_factory=list)
+    errors: list[str] = Field(default_factory=list)
     started_at: Optional[datetime] = None
     completed_at: Optional[datetime] = None
 
+    model_config = {"from_attributes": True}
+
+    @computed_field
     @property
     def duration_seconds(self) -> Optional[float]:
         if self.started_at and self.completed_at:
@@ -134,17 +139,15 @@ class ScraperStats:
         return None
 
     def to_dict(self) -> dict:
-        data = asdict(self)
+        data = self.model_dump()
         if self.started_at:
             data["started_at"] = self.started_at.isoformat()
         if self.completed_at:
             data["completed_at"] = self.completed_at.isoformat()
-        data["duration_seconds"] = self.duration_seconds
         return data
 
 
-@dataclass
-class DbStats:
+class DbStats(BaseModel):
     """Database statistics"""
 
     total_listings: int = 0
@@ -152,8 +155,10 @@ class DbStats:
     with_well: int = 0
     new_last_24h: int = 0
 
+    model_config = {"from_attributes": True}
+
     def to_dict(self) -> dict:
-        return asdict(self)
+        return self.model_dump()
 
 
 def _parse_datetime(value) -> Optional[datetime]:
