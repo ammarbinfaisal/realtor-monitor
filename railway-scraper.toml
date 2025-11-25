@@ -7,7 +7,11 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python run_scraper.py"
-# Run daily at 2 AM EST (7 AM UTC)
-cronSchedule = "0 7 * * *"
+# Run daily at 2 AM Central Time (8 AM UTC during CDT, 8 AM UTC during CST)
+# Wisconsin is in Central Time zone
+# CDT (Mar-Nov): UTC-5, so 2 AM CDT = 7 AM UTC
+# CST (Nov-Mar): UTC-6, so 2 AM CST = 8 AM UTC
+# Using 8 AM UTC to cover CST (winter), will run at 3 AM during CDT (summer)
+cronSchedule = "0 8 * * *"
 # Railway will stop the service after it exits
 restartPolicyType = "NEVER"

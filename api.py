@@ -15,7 +15,14 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, Set
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Query, HTTPException
+from fastapi import (
+    FastAPI,
+    WebSocket,
+    WebSocketDisconnect,
+    Query,
+    HTTPException,
+    BackgroundTasks,
+)
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -202,6 +209,52 @@ async def notify_new_listings(data: dict):
         )
 
     return {"notified": len(manager.active_connections)}
+
+
+# === Manual scraper trigger ===
+
+# Track if scraper is running to prevent concurrent runs
+_scraper_running = False
+
+
+@app.post("/api/scraper/trigger")
+async def trigger_scraper():
+    """
+    Manually trigger the scraper.
+    Runs in background and returns immediately.
+    """
+    global _scraper_running
+
+    if _scraper_running:
+        raise HTTPException(409, "Scraper is already running")
+
+    async def run_scraper_task():
+        global _scraper_running
+        _scraper_running = True
+        try:
+            # Import here to avoid circular imports
+            from run_scraper import run_scraper
+
+            await run_scraper()
+        except Exception as e:
+            logger.error(f"Scraper failed: {e}")
+        finally:
+            _scraper_running = False
+
+    # Run in background
+    asyncio.create_task(run_scraper_task())
+
+    return {
+        "status": "started",
+        "message": "Scraper triggered, running in background",
+        "timestamp": datetime.utcnow().isoformat(),
+    }
+
+
+@app.get("/api/scraper/status")
+async def get_scraper_status():
+    """Check if scraper is currently running"""
+    return {"running": _scraper_running, "timestamp": datetime.utcnow().isoformat()}
 
 
 # === Background polling for updates ===
