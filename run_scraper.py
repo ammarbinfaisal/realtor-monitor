@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+"""
+Main entry point for Railway cron job.
+Runs the scraper, saves to DB, sends Telegram notification.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import sys
+import logging
+import traceback
+from datetime import datetime
+
+# Import the existing scraper
+from scraper_curl import RealtorScraperCurl
+
+# Import new modules
+import db
+from models import Listing, ScraperStats
+import notifier
+
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout),
+    ],
+)
+logger = logging.getLogger(__name__)
+
+
+async def run_scraper():
+    """
+    Main scraper function for Railway cron.
+
+    1. Scrapes listings from Realtor.com
+    2. Saves to PostgreSQL database
+    3. Sends Telegram notification with new septic/well listings
+    4. Sends XLSX with all listings
+    """
+    stats = ScraperStats(started_at=datetime.utcnow())
+    all_listings: list[Listing] = []
+    new_septic_well_listings: list[Listing] = []
+
+    try:
+        logger.info("=" * 60)
+        logger.info("Starting Realtor Scraper (Railway Cron)")
+        logger.info("=" * 60)
+
+        # Initialize database
+        db.init_database()
+
+        # Create scraper instance
+        scraper = RealtorScraperCurl()
+
+        # Get listings from all target counties (past 24 hours)
+        api_listings = []
+        for county_name in scraper.TARGET_COUNTIES:
+            logger.info(f"Searching county: {county_name}, WI")
+            county_listings = scraper.search_listings_api(
+                state_code="WI",
+                limit=500,
+                days_old=1,  # Past 24 hours
+                county=county_name,
+            )
+            api_listings.extend(county_listings)
+            await asyncio.sleep(0.5)  # Rate limiting
+
+        logger.info(f"Total listings from all counties: {len(api_listings)}")
+
+        # Deduplicate
+        from scraper_curl import deduplicate_listings
+
+        api_listings = deduplicate_listings(api_listings)
+        logger.info(f"After deduplication: {len(api_listings)} unique listings")
+
+        stats.total_processed = len(api_listings)
+
+        # Process each listing
+        for i, api_listing in enumerate(api_listings):
+            try:
+                # Get basic listing info
+                result_dict = scraper.process_api_listing(api_listing)
+
+                # Fetch property details to check for septic/well
+                if result_dict.get("property_id"):
+                    await asyncio.sleep(0.3)  # Rate limiting
+                    property_data = await scraper.get_property_details_async(
+                        result_dict["property_id"]
+                    )
+                    if property_data:
+                        result_dict = scraper.process_property_details(
+                            property_data, result_dict
+                        )
+
+                # Convert to Listing dataclass
+                listing = Listing(
+                    listing_url=result_dict.get("url", ""),
+                    property_id=result_dict.get("property_id"),
+                    address=result_dict.get("address"),
+                    city=result_dict.get("city"),
+                    state_code=result_dict.get("state_code"),
+                    postal_code=result_dict.get("postal_code"),
+                    price=result_dict.get("price"),
+                    beds=result_dict.get("beds"),
+                    baths=result_dict.get("baths"),
+                    sqft=result_dict.get("sqft"),
+                    list_date=result_dict.get("list_date"),
+                    has_septic_system=result_dict.get("has_septic", False),
+                    has_private_well=result_dict.get("has_well", False),
+                    septic_mentions=result_dict.get("septic_mentions", []),
+                    well_mentions=result_dict.get("well_mentions", []),
+                    agent_url=result_dict.get("agent_url"),
+                    agent_name=result_dict.get("agent_name"),
+                    agent_phone=result_dict.get("agent_phone"),
+                    brokerage_name=result_dict.get("brokerage_name"),
+                )
+
+                # Save to database
+                is_new, saved_listing = db.save_listing(listing)
+                all_listings.append(saved_listing)
+
+                if is_new:
+                    stats.new_listings += 1
+                    # Track new septic/well listings for notification
+                    if listing.has_septic_system or listing.has_private_well:
+                        new_septic_well_listings.append(saved_listing)
+                        stats.septic_well_count += 1
+                        logger.info(
+                            f"NEW SEPTIC/WELL: {listing.address}, {listing.city} "
+                            f"(Septic: {listing.has_septic_system}, Well: {listing.has_private_well})"
+                        )
+                else:
+                    stats.updated_listings += 1
+
+                # Progress logging
+                if (i + 1) % 50 == 0 or (i + 1) == len(api_listings):
+                    logger.info(f"Processed {i + 1}/{len(api_listings)}")
+
+            except Exception as e:
+                logger.error(f"Error processing listing: {e}")
+                stats.errors.append(str(e))
+
+        # Close async session
+        await scraper.close_async_session()
+
+        stats.completed_at = datetime.utcnow()
+
+        # Log summary
+        logger.info("=" * 60)
+        logger.info("SCRAPE COMPLETE")
+        logger.info(f"Total processed: {stats.total_processed}")
+        logger.info(f"New listings: {stats.new_listings}")
+        logger.info(f"Updated: {stats.updated_listings}")
+        logger.info(f"New Septic/Well: {stats.septic_well_count}")
+        logger.info(f"Duration: {stats.duration_seconds:.1f}s")
+        logger.info("=" * 60)
+
+        # Send Telegram notification
+        await notifier.send_scrape_report(
+            stats=stats,
+            all_listings=all_listings,
+            new_septic_well_listings=new_septic_well_listings,
+        )
+
+        logger.info("Telegram notification sent")
+
+    except Exception as e:
+        logger.error(f"Scraper failed: {e}")
+        logger.error(traceback.format_exc())
+        stats.errors.append(str(e))
+        stats.completed_at = datetime.utcnow()
+
+        # Send error notification
+        await notifier.send_error_alert(
+            f"Scraper failed:\n{str(e)}\n\n{traceback.format_exc()}"
+        )
+
+        sys.exit(1)
+
+    logger.info("Scraper finished successfully")
+    return stats
+
+
+def main():
+    """Sync entry point"""
+    asyncio.run(run_scraper())
+
+
+if __name__ == "__main__":
+    main()

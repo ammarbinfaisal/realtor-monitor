@@ -1,0 +1,375 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WI Realtor Listings - Septic & Well</title>
+  <script defer src="https://unpkg.com/alpinejs@3.x.x/dist/cdn.min.js"></script>
+  <script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+  <link href="https://cdn.jsdelivr.net/npm/tailwindcss@2.2.19/dist/tailwind.min.css" rel="stylesheet">
+  <style>
+    [x-cloak] { display: none !important; }
+    .toast-enter { animation: slideIn 0.3s ease-out; }
+    .toast-leave { animation: slideOut 0.3s ease-in; }
+    @keyframes slideIn { from { transform: translateX(100%); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+    @keyframes slideOut { from { transform: translateX(0); opacity: 1; } to { transform: translateX(100%); opacity: 0; } }
+  </style>
+</head>
+<body class="bg-gray-100 min-h-screen" x-data="listingsApp()" x-init="init()">
+  
+  <!-- Header -->
+  <header class="bg-white shadow">
+    <div class="max-w-7xl mx-auto px-4 py-4 flex justify-between items-center">
+      <div>
+        <h1 class="text-2xl font-bold text-gray-900">WI Realtor Listings</h1>
+        <p class="text-sm text-gray-500">Septic & Well Properties</p>
+      </div>
+      <div class="flex items-center space-x-4">
+        <!-- Connection status -->
+        <div class="flex items-center">
+          <span x-show="wsConnected" class="flex items-center text-green-600">
+            <span class="w-2 h-2 bg-green-500 rounded-full mr-2 animate-pulse"></span>
+            Live
+          </span>
+          <span x-show="!wsConnected" class="flex items-center text-red-600">
+            <span class="w-2 h-2 bg-red-500 rounded-full mr-2"></span>
+            Disconnected
+          </span>
+        </div>
+        <!-- Export button -->
+        <button @click="exportXLSX()" 
+                class="bg-green-600 hover:bg-green-700 text-white px-4 py-2 rounded-lg flex items-center">
+          <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"/>
+          </svg>
+          Export XLSX
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <main class="max-w-7xl mx-auto px-4 py-6">
+    
+    <!-- Stats Cards -->
+    <div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div class="bg-white rounded-lg shadow p-4">
+        <p class="text-sm text-gray-500">Total Listings</p>
+        <p class="text-2xl font-bold" x-text="stats.total_listings || 0"></p>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <p class="text-sm text-gray-500">With Septic</p>
+        <p class="text-2xl font-bold text-blue-600" x-text="stats.with_septic || 0"></p>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <p class="text-sm text-gray-500">With Well</p>
+        <p class="text-2xl font-bold text-green-600" x-text="stats.with_well || 0"></p>
+      </div>
+      <div class="bg-white rounded-lg shadow p-4">
+        <p class="text-sm text-gray-500">New (24h)</p>
+        <p class="text-2xl font-bold text-orange-600" x-text="stats.new_last_24h || 0"></p>
+      </div>
+    </div>
+
+    <!-- Filters -->
+    <div class="bg-white rounded-lg shadow p-4 mb-6">
+      <div class="flex flex-wrap gap-4 items-center">
+        <label class="flex items-center">
+          <input type="checkbox" x-model="filters.septicOnly" class="mr-2 h-4 w-4 text-blue-600">
+          <span>Septic Only</span>
+        </label>
+        <label class="flex items-center">
+          <input type="checkbox" x-model="filters.wellOnly" class="mr-2 h-4 w-4 text-green-600">
+          <span>Well Only</span>
+        </label>
+        <select x-model="filters.city" class="border rounded-lg px-3 py-2">
+          <option value="">All Cities</option>
+          <template x-for="city in cities" :key="city">
+            <option :value="city" x-text="city"></option>
+          </template>
+        </select>
+        <input type="text" x-model="filters.search" placeholder="Search address..." 
+               class="border rounded-lg px-3 py-2 w-48">
+        <button @click="refreshListings()" 
+                class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
+          Refresh
+        </button>
+      </div>
+    </div>
+
+    <!-- Listings Table -->
+    <div class="bg-white rounded-lg shadow overflow-hidden">
+      <div class="overflow-x-auto">
+        <table class="min-w-full divide-y divide-gray-200">
+          <thead class="bg-gray-50">
+            <tr>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Address</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">City</th>
+              <th class="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">Price</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Bed/Bath</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Sqft</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Septic</th>
+              <th class="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase tracking-wider">Well</th>
+              <th class="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Agent</th>
+            </tr>
+          </thead>
+          <tbody class="bg-white divide-y divide-gray-200">
+            <template x-for="listing in filteredListings" :key="listing.listing_url">
+              <tr class="hover:bg-gray-50" :class="{'bg-yellow-50': isNew(listing)}">
+                <td class="px-4 py-3">
+                  <a :href="listing.listing_url" target="_blank" 
+                     class="text-blue-600 hover:text-blue-800 font-medium"
+                     x-text="listing.address || 'N/A'"></a>
+                  <span x-show="isNew(listing)" class="ml-2 px-2 py-0.5 text-xs bg-orange-100 text-orange-800 rounded">NEW</span>
+                </td>
+                <td class="px-4 py-3 text-gray-600" x-text="listing.city || '-'"></td>
+                <td class="px-4 py-3 text-right font-medium" x-text="formatPrice(listing.price)"></td>
+                <td class="px-4 py-3 text-center text-gray-600" x-text="`${listing.beds || '-'} / ${listing.baths || '-'}`"></td>
+                <td class="px-4 py-3 text-center text-gray-600" x-text="listing.sqft ? listing.sqft.toLocaleString() : '-'"></td>
+                <td class="px-4 py-3 text-center">
+                  <span x-show="listing.has_septic_system" class="text-blue-600 font-bold">Yes</span>
+                  <span x-show="!listing.has_septic_system" class="text-gray-400">-</span>
+                </td>
+                <td class="px-4 py-3 text-center">
+                  <span x-show="listing.has_private_well" class="text-green-600 font-bold">Yes</span>
+                  <span x-show="!listing.has_private_well" class="text-gray-400">-</span>
+                </td>
+                <td class="px-4 py-3">
+                  <div class="text-sm" x-text="listing.agent_name || '-'"></div>
+                  <a x-show="listing.agent_phone" :href="'tel:' + listing.agent_phone" 
+                     class="text-xs text-gray-500 hover:text-blue-600"
+                     x-text="listing.agent_phone"></a>
+                </td>
+              </tr>
+            </template>
+            <tr x-show="filteredListings.length === 0">
+              <td colspan="8" class="px-4 py-8 text-center text-gray-500">
+                <span x-show="loading">Loading...</span>
+                <span x-show="!loading">No listings found matching filters</span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      
+      <!-- Pagination / Count -->
+      <div class="px-4 py-3 bg-gray-50 border-t flex justify-between items-center">
+        <span class="text-sm text-gray-600">
+          Showing <span x-text="filteredListings.length"></span> of <span x-text="listings.length"></span> listings
+        </span>
+        <span class="text-sm text-gray-500" x-text="'Last updated: ' + lastUpdate"></span>
+      </div>
+    </div>
+  </main>
+
+  <!-- Toast Notifications -->
+  <div class="fixed bottom-4 right-4 space-y-2" x-cloak>
+    <template x-for="toast in toasts" :key="toast.id">
+      <div class="bg-blue-600 text-white px-6 py-3 rounded-lg shadow-lg toast-enter flex items-center"
+           x-show="toast.visible"
+           x-transition:leave="toast-leave">
+        <svg class="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <span x-text="toast.message"></span>
+      </div>
+    </template>
+  </div>
+
+  <script>
+    // Get API URL - use relative path or configure based on environment
+    const API_URL = window.location.origin;
+    const WS_URL = API_URL.replace('http', 'ws');
+
+    function listingsApp() {
+      return {
+        listings: [],
+        stats: {},
+        cities: [],
+        filters: {
+          septicOnly: false,
+          wellOnly: false,
+          city: '',
+          search: ''
+        },
+        loading: true,
+        wsConnected: false,
+        ws: null,
+        toasts: [],
+        toastId: 0,
+        lastUpdate: '-',
+
+        async init() {
+          await this.fetchStats();
+          await this.fetchListings();
+          await this.fetchCities();
+          this.connectWebSocket();
+        },
+
+        async fetchStats() {
+          try {
+            const res = await fetch(`${API_URL}/api/stats`);
+            this.stats = await res.json();
+          } catch (e) {
+            console.error('Failed to fetch stats:', e);
+          }
+        },
+
+        async fetchListings() {
+          this.loading = true;
+          try {
+            // Always fetch listings that have septic OR well
+            const res = await fetch(`${API_URL}/api/listings?limit=500`);
+            const data = await res.json();
+            this.listings = data.listings;
+            this.lastUpdate = new Date().toLocaleTimeString();
+          } catch (e) {
+            console.error('Failed to fetch listings:', e);
+          }
+          this.loading = false;
+        },
+
+        async fetchCities() {
+          try {
+            const res = await fetch(`${API_URL}/api/cities`);
+            const data = await res.json();
+            this.cities = data.cities;
+          } catch (e) {
+            console.error('Failed to fetch cities:', e);
+          }
+        },
+
+        async refreshListings() {
+          await this.fetchStats();
+          await this.fetchListings();
+          this.showToast('Listings refreshed');
+        },
+
+        connectWebSocket() {
+          try {
+            this.ws = new WebSocket(`${WS_URL}/ws`);
+            
+            this.ws.onopen = () => {
+              this.wsConnected = true;
+              console.log('WebSocket connected');
+            };
+            
+            this.ws.onclose = () => {
+              this.wsConnected = false;
+              console.log('WebSocket disconnected, reconnecting...');
+              setTimeout(() => this.connectWebSocket(), 5000);
+            };
+            
+            this.ws.onerror = (e) => {
+              console.error('WebSocket error:', e);
+            };
+            
+            this.ws.onmessage = (event) => {
+              const data = JSON.parse(event.data);
+              this.handleWsMessage(data);
+            };
+          } catch (e) {
+            console.error('WebSocket connection failed:', e);
+            setTimeout(() => this.connectWebSocket(), 5000);
+          }
+        },
+
+        handleWsMessage(data) {
+          console.log('WS message:', data.type);
+          
+          if (data.type === 'connected') {
+            if (data.stats) this.stats = data.stats;
+          }
+          else if (data.type === 'new_listings' || data.type === 'update') {
+            // New listings found
+            if (data.count > 0) {
+              this.showToast(`${data.count} new listing(s) found!`);
+              this.refreshListings();
+            }
+          }
+          else if (data.type === 'ping') {
+            // Respond to ping
+            if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+              this.ws.send('pong');
+            }
+          }
+        },
+
+        get filteredListings() {
+          return this.listings.filter(l => {
+            // Septic filter
+            if (this.filters.septicOnly && !l.has_septic_system) return false;
+            // Well filter
+            if (this.filters.wellOnly && !l.has_private_well) return false;
+            // City filter
+            if (this.filters.city && l.city !== this.filters.city) return false;
+            // Search filter
+            if (this.filters.search) {
+              const search = this.filters.search.toLowerCase();
+              const address = (l.address || '').toLowerCase();
+              const city = (l.city || '').toLowerCase();
+              if (!address.includes(search) && !city.includes(search)) return false;
+            }
+            return true;
+          });
+        },
+
+        formatPrice(price) {
+          if (!price) return '-';
+          return '$' + price.toLocaleString();
+        },
+
+        isNew(listing) {
+          if (!listing.first_seen_at) return false;
+          const firstSeen = new Date(listing.first_seen_at);
+          const now = new Date();
+          const hoursDiff = (now - firstSeen) / (1000 * 60 * 60);
+          return hoursDiff < 24;
+        },
+
+        exportXLSX() {
+          const data = this.filteredListings.map(l => ({
+            'Address': l.address,
+            'City': l.city,
+            'State': l.state_code,
+            'Zip': l.postal_code,
+            'Price': l.price,
+            'Beds': l.beds,
+            'Baths': l.baths,
+            'Sqft': l.sqft,
+            'Septic': l.has_septic_system ? 'Yes' : 'No',
+            'Well': l.has_private_well ? 'Yes' : 'No',
+            'Agent': l.agent_name,
+            'Phone': l.agent_phone,
+            'Brokerage': l.brokerage_name,
+            'URL': l.listing_url,
+            'List Date': l.list_date,
+            'First Seen': l.first_seen_at
+          }));
+
+          const ws = XLSX.utils.json_to_sheet(data);
+          const wb = XLSX.utils.book_new();
+          XLSX.utils.book_append_sheet(wb, ws, 'Listings');
+          
+          const filename = `realtor_listings_${new Date().toISOString().slice(0,10)}.xlsx`;
+          XLSX.writeFile(wb, filename);
+          
+          this.showToast(`Exported ${data.length} listings`);
+        },
+
+        showToast(message) {
+          const id = ++this.toastId;
+          this.toasts.push({ id, message, visible: true });
+          
+          setTimeout(() => {
+            const toast = this.toasts.find(t => t.id === id);
+            if (toast) toast.visible = false;
+            setTimeout(() => {
+              this.toasts = this.toasts.filter(t => t.id !== id);
+            }, 300);
+          }, 4000);
+        }
+      };
+    }
+  </script>
+</body>
+</html>

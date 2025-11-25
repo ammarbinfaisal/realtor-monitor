@@ -1,0 +1,13 @@
+# Railway config for SCRAPER service (cron job)
+# Rename to railway.toml when deploying the scraper service
+
+[build]
+builder = "DOCKERFILE"
+dockerfilePath = "Dockerfile"
+
+[deploy]
+startCommand = "python run_scraper.py"
+# Run daily at 2 AM EST (7 AM UTC)
+cronSchedule = "0 7 * * *"
+# Railway will stop the service after it exits
+restartPolicyType = "NEVER"

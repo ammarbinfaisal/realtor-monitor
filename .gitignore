@@ -1,0 +1,47 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.gemini/
+
+# Logs and databases
+*.log
+*.db
+*.sqlite3
+
+# Debug files
+debug_*.html
+debug_*.png
+tmp*.png
+
+# API response cache
+api_response.json
+
+# Exports (local development)
+*.xlsx
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Ruff cache
+.ruff_cache/
+
+# OS
+.DS_Store
+Thumbs.db
