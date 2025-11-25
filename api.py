@@ -216,13 +216,29 @@ async def notify_new_listings(data: dict):
 # Track if scraper is running to prevent concurrent runs
 _scraper_running = False
 
+# Secret for triggering scraper (set via environment variable)
+SCRAPER_SECRET = os.environ.get("SCRAPER_SECRET", "")
+
+
+def _verify_scraper_secret(secret: Optional[str]) -> None:
+    """Verify the scraper secret token"""
+    if not SCRAPER_SECRET:
+        raise HTTPException(500, "SCRAPER_SECRET not configured on server")
+    if not secret:
+        raise HTTPException(401, "Missing secret parameter")
+    if secret != SCRAPER_SECRET:
+        raise HTTPException(403, "Invalid secret")
+
 
 @app.post("/api/scraper/trigger")
-async def trigger_scraper():
+async def trigger_scraper(secret: str = Query(..., description="Scraper secret token")):
     """
     Manually trigger the scraper.
+    Requires secret token for authorization.
     Runs in background and returns immediately.
     """
+    _verify_scraper_secret(secret)
+
     global _scraper_running
 
     if _scraper_running:
@@ -249,6 +265,12 @@ async def trigger_scraper():
         "message": "Scraper triggered, running in background",
         "timestamp": datetime.utcnow().isoformat(),
     }
+
+
+@app.get("/api/scraper/status")
+async def get_scraper_status():
+    """Check if scraper is currently running"""
+    return {"running": _scraper_running, "timestamp": datetime.utcnow().isoformat()}
 
 
 @app.get("/api/scraper/status")
