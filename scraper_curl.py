@@ -270,7 +270,6 @@ class RealtorScraperCurl:
         "Accept-Language": "en-US,en;q=0.9",
         "Content-Type": "application/json",
         "Origin": "https://www.realtor.com",
-        "Referer": "https://www.realtor.com/realestateandhomes-search/Wisconsin",
         "Sec-Ch-Ua": '"Chromium";v="136", "Google Chrome";v="136", "Not-A.Brand";v="99"',
         "Sec-Ch-Ua-Mobile": "?0",
         "Sec-Ch-Ua-Platform": '"macOS"',
