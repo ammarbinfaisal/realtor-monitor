@@ -352,9 +352,15 @@
         isNew(listing) {
           if (!listing.first_seen_at) return false;
           const firstSeen = new Date(listing.first_seen_at);
+          
+          // Calculate yesterday's 2am CST (UTC-6)
           const now = new Date();
-          const hoursDiff = (now - firstSeen) / (1000 * 60 * 60);
-          return hoursDiff < 24;
+          const cutoff = new Date(now);
+          cutoff.setDate(cutoff.getDate() - 1); // Yesterday
+          // Set to 2am CST = 8am UTC (CST is UTC-6)
+          cutoff.setUTCHours(8, 0, 0, 0);
+          
+          return firstSeen >= cutoff;
         },
 
         exportXLSX() {
