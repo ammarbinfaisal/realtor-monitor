@@ -116,17 +116,14 @@
             <option :value="city" x-text="city"></option>
           </template>
         </select>
-        <input type="text" x-model="filters.search" placeholder="Search... (use | for OR)" 
-               class="border rounded-lg px-3 py-2 w-56"
-               title="Search address, city, county. Use | for OR matching (e.g. madison|milwaukee)">
+        <input type="text" x-model="filters.search" placeholder="Search address, city, county..." 
+               class="border rounded-lg px-3 py-2 w-56">
         <button @click="refreshListings()" 
                 class="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg">
           Refresh
         </button>
       </div>
-      <p class="text-xs text-gray-500 mt-2">
-        Tip: Use | in search for OR matching (e.g. "madison|milwaukee" or "septic|well")
-      </p>
+
     </div>
 
     <!-- Listings Table -->
