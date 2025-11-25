@@ -323,3 +323,113 @@ def get_stats() -> DbStats:
             with_well=well,
             new_last_24h=new_24h,
         )
+
+
+# === Telegram Users ===
+
+
+def register_telegram_user(
+    chat_id: int,
+    username: Optional[str] = None,
+    first_name: Optional[str] = None,
+    last_name: Optional[str] = None,
+) -> bool:
+    """
+    Register or reactivate a Telegram user.
+
+    Returns True if this is a new user, False if existing user was reactivated.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Check if user exists
+        cursor.execute(
+            "SELECT chat_id, is_active FROM telegram_users WHERE chat_id = %s",
+            (chat_id,),
+        )
+        existing = cursor.fetchone()
+
+        if existing:
+            # Reactivate if inactive
+            cursor.execute(
+                """
+                UPDATE telegram_users SET
+                    is_active = TRUE,
+                    username = COALESCE(%s, username),
+                    first_name = COALESCE(%s, first_name),
+                    last_name = COALESCE(%s, last_name),
+                    updated_at = NOW()
+                WHERE chat_id = %s
+                """,
+                (username, first_name, last_name, chat_id),
+            )
+            conn.commit()
+            was_inactive = not existing["is_active"]
+            logger.info(
+                f"Telegram user {chat_id} {'reactivated' if was_inactive else 'updated'}"
+            )
+            return was_inactive  # Return True only if it was inactive before
+        else:
+            # New user
+            cursor.execute(
+                """
+                INSERT INTO telegram_users (chat_id, username, first_name, last_name)
+                VALUES (%s, %s, %s, %s)
+                """,
+                (chat_id, username, first_name, last_name),
+            )
+            conn.commit()
+            logger.info(f"Registered new Telegram user: {chat_id} (@{username})")
+            return True
+
+
+def deactivate_telegram_user(chat_id: int) -> bool:
+    """
+    Deactivate a Telegram user (stop notifications).
+
+    Returns True if user was found and deactivated, False if not found.
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            """
+            UPDATE telegram_users SET is_active = FALSE, updated_at = NOW()
+            WHERE chat_id = %s
+            RETURNING chat_id
+            """,
+            (chat_id,),
+        )
+        result = cursor.fetchone()
+        conn.commit()
+
+        if result:
+            logger.info(f"Deactivated Telegram user: {chat_id}")
+            return True
+        return False
+
+
+def get_active_telegram_users() -> list[dict]:
+    """Get all active Telegram users for notifications."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT chat_id, username, first_name, last_name
+            FROM telegram_users
+            WHERE is_active = TRUE
+            ORDER BY created_at
+        """)
+        return [dict(row) for row in cursor.fetchall()]
+
+
+def get_telegram_user_count() -> tuple[int, int]:
+    """Get count of (active, total) Telegram users."""
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT 
+                COUNT(*) FILTER (WHERE is_active = TRUE) as active,
+                COUNT(*) as total
+            FROM telegram_users
+        """)
+        row = cursor.fetchone()
+        return (row["active"] or 0, row["total"] or 0) if row else (0, 0)

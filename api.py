@@ -27,8 +27,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from telegram import Bot, Update  # type: ignore
+
 import db
 from models import Listing, DbStats
+
+# Telegram bot token from environment
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -386,6 +391,116 @@ async def startup_event():
         logger.error(f"Failed to initialize database: {e}")
         logger.error("Make sure DATABASE_URL environment variable is set correctly")
         raise
+
+
+# === Telegram Webhook ===
+
+
+@app.post("/telegram/webhook/{token}")
+async def telegram_webhook(token: str, update: dict):
+    """
+    Telegram bot webhook endpoint.
+    Handles /start and /stop commands for user registration.
+    """
+    # Verify token matches our bot token to prevent unauthorized access
+    if token != TELEGRAM_BOT_TOKEN:
+        raise HTTPException(403, "Invalid token")
+
+    try:
+        # Parse the update
+        message = update.get("message", {})
+        if not message:
+            return {"ok": True}
+
+        chat = message.get("chat", {})
+        chat_id = chat.get("id")
+        chat_type = chat.get("type", "private")
+
+        # Only handle private chats
+        if chat_type != "private" or not chat_id:
+            return {"ok": True}
+
+        from_user = message.get("from", {})
+        username = from_user.get("username")
+        first_name = from_user.get("first_name")
+        last_name = from_user.get("last_name")
+
+        text = message.get("text", "").strip()
+
+        bot = Bot(token=TELEGRAM_BOT_TOKEN)
+
+        if text == "/start":
+            # Register user
+            is_new = db.register_telegram_user(
+                chat_id=chat_id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+            )
+
+            if is_new:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="Welcome! You're now subscribed to Realtor listing alerts.\n\n"
+                    "You'll receive notifications when new listings with septic systems "
+                    "or private wells are found.\n\n"
+                    "Send /stop to unsubscribe.",
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="You're already subscribed to alerts!\n\nSend /stop to unsubscribe.",
+                )
+            logger.info(f"Telegram /start from {chat_id} (@{username}) - new={is_new}")
+
+        elif text == "/stop":
+            # Deactivate user
+            was_active = db.deactivate_telegram_user(chat_id)
+
+            if was_active:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="You've been unsubscribed from alerts.\n\nSend /start to resubscribe.",
+                )
+            else:
+                await bot.send_message(
+                    chat_id=chat_id,
+                    text="You weren't subscribed. Send /start to subscribe.",
+                )
+            logger.info(
+                f"Telegram /stop from {chat_id} (@{username}) - was_active={was_active}"
+            )
+
+        elif text == "/status":
+            # Show subscription status
+            active, total = db.get_telegram_user_count()
+            stats = db.get_stats()
+            await bot.send_message(
+                chat_id=chat_id,
+                text=f"*Bot Status*\n\n"
+                f"Active subscribers: {active}\n"
+                f"Total listings: {stats.total_listings}\n"
+                f"With septic: {stats.with_septic}\n"
+                f"With well: {stats.with_well}\n"
+                f"New (24h): {stats.new_last_24h}",
+                parse_mode="Markdown",
+            )
+
+        else:
+            # Unknown command
+            await bot.send_message(
+                chat_id=chat_id,
+                text="Commands:\n"
+                "/start - Subscribe to alerts\n"
+                "/stop - Unsubscribe from alerts\n"
+                "/status - Show bot status",
+            )
+
+    except Exception as e:
+        logger.error(f"Telegram webhook error: {e}")
+        # Return OK to prevent Telegram from retrying
+
+    return {"ok": True}
 
 
 # === Serve Frontend ===

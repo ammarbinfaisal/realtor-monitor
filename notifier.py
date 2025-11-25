@@ -23,12 +23,68 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
-TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+
+# Env var to control which users receive notifications
+# If set, only users in this comma-separated list of chat_ids will be notified
+# If empty/unset, all active users will be notified
+TELEGRAM_ALLOWED_CHAT_IDS = os.environ.get("TELEGRAM_ALLOWED_CHAT_IDS", "")
 
 
 def is_configured() -> bool:
     """Check if Telegram notifications are configured"""
-    return bool(TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID)
+    return bool(TELEGRAM_BOT_TOKEN)
+
+
+def _get_allowed_chat_ids() -> set[int] | None:
+    """
+    Get set of allowed chat IDs from env var.
+    Returns None if env var is empty (meaning all users are allowed).
+    """
+    if not TELEGRAM_ALLOWED_CHAT_IDS:
+        return None
+
+    try:
+        return {
+            int(cid.strip())
+            for cid in TELEGRAM_ALLOWED_CHAT_IDS.split(",")
+            if cid.strip()
+        }
+    except ValueError:
+        logger.error(
+            f"Invalid TELEGRAM_ALLOWED_CHAT_IDS format: {TELEGRAM_ALLOWED_CHAT_IDS}"
+        )
+        return set()
+
+
+def _get_target_chat_ids() -> list[dict]:
+    """
+    Get list of chat IDs to send notifications to.
+
+    Uses database of registered users, filtered by TELEGRAM_ALLOWED_CHAT_IDS if set.
+    """
+    # Import here to avoid circular import
+    import db
+
+    # Get all active users from database
+    users = db.get_active_telegram_users()
+
+    if not users:
+        logger.warning("No active Telegram users in database")
+        return []
+
+    # Filter by allowed chat IDs if env var is set
+    allowed = _get_allowed_chat_ids()
+
+    if allowed is not None:
+        filtered_users = [u for u in users if u["chat_id"] in allowed]
+        logger.info(
+            f"Filtering users: {len(filtered_users)}/{len(users)} allowed "
+            f"(TELEGRAM_ALLOWED_CHAT_IDS={TELEGRAM_ALLOWED_CHAT_IDS})"
+        )
+        return filtered_users
+
+    logger.info(f"Sending to all {len(users)} active users")
+    return users
 
 
 async def send_scrape_report(
@@ -37,7 +93,7 @@ async def send_scrape_report(
     new_septic_well_listings: list[Listing],
 ) -> None:
     """
-    Send complete scrape report:
+    Send complete scrape report to all registered Telegram users:
     - Telegram message with NEW septic/well listings only
     - XLSX attachment with ALL listings
 
@@ -48,6 +104,12 @@ async def send_scrape_report(
     """
     if not is_configured():
         logger.warning("Telegram not configured, skipping notification")
+        return
+
+    # Get target users
+    target_users = _get_target_chat_ids()
+    if not target_users:
+        logger.warning("No target users for notifications")
         return
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -99,26 +161,43 @@ async def send_scrape_report(
     if stats.errors:
         message += f"\n_Errors: {len(stats.errors)}_"
 
-    try:
-        # Send message first
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-        )
-        logger.info("Sent Telegram summary notification")
+    # Send to all target users
+    success_count = 0
+    fail_count = 0
 
-        # Then send XLSX with ALL listings
-        if all_listings:
-            await _send_xlsx(bot, all_listings, "All Listings")
+    for user in target_users:
+        chat_id = user["chat_id"]
+        username = user.get("username") or user.get("first_name") or str(chat_id)
 
-    except Exception as e:
-        logger.error(f"Failed to send Telegram report: {e}")
+        try:
+            # Send message first
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+            )
+
+            # Then send XLSX with ALL listings
+            if all_listings:
+                await _send_xlsx(bot, all_listings, "All Listings", chat_id)
+
+            success_count += 1
+            logger.info(f"Sent report to user {chat_id} (@{username})")
+
+        except Exception as e:
+            fail_count += 1
+            logger.error(f"Failed to send report to user {chat_id} (@{username}): {e}")
+
+    logger.info(
+        f"Notification summary: {success_count} success, {fail_count} failed out of {len(target_users)} users"
+    )
 
 
-async def _send_xlsx(bot: Bot, listings: list[Listing], title: str) -> None:
-    """Generate and send XLSX file"""
+async def _send_xlsx(
+    bot: Bot, listings: list[Listing], title: str, chat_id: int
+) -> None:
+    """Generate and send XLSX file to a specific chat"""
     if not listings:
         return
 
@@ -212,24 +291,28 @@ async def _send_xlsx(bot: Bot, listings: list[Listing], title: str) -> None:
     caption += f"Total: {len(listings)} | Septic: {septic_count} | Well: {well_count}"
 
     await bot.send_document(
-        chat_id=TELEGRAM_CHAT_ID,
+        chat_id=chat_id,
         document=buffer,
         filename=filename,
         caption=caption,
         parse_mode=ParseMode.MARKDOWN,
     )
-    logger.info(f"Sent XLSX: {filename} ({len(listings)} listings)")
+    logger.info(f"Sent XLSX: {filename} ({len(listings)} listings) to {chat_id}")
 
 
 async def send_septic_well_alert(listing: Listing) -> None:
     """
-    Send immediate alert for a single new septic/well listing.
+    Send immediate alert for a single new septic/well listing to all registered users.
     Use this for real-time alerts during scraping if desired.
     """
     if not is_configured():
         return
 
     if not (listing.has_septic_system or listing.has_private_well):
+        return
+
+    target_users = _get_target_chat_ids()
+    if not target_users:
         return
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -258,21 +341,30 @@ async def send_septic_well_alert(listing: Listing) -> None:
 [View Listing]({listing.listing_url})
 """
 
-    try:
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID,
-            text=message,
-            parse_mode=ParseMode.MARKDOWN,
-            disable_web_page_preview=True,
-        )
-        logger.info(f"Sent septic/well alert: {listing.address}")
-    except Exception as e:
-        logger.error(f"Failed to send alert: {e}")
+    for user in target_users:
+        chat_id = user["chat_id"]
+        username = user.get("username") or str(chat_id)
+        try:
+            await bot.send_message(
+                chat_id=chat_id,
+                text=message,
+                parse_mode=ParseMode.MARKDOWN,
+                disable_web_page_preview=True,
+            )
+            logger.info(
+                f"Sent septic/well alert to {chat_id} (@{username}): {listing.address}"
+            )
+        except Exception as e:
+            logger.error(f"Failed to send alert to {chat_id} (@{username}): {e}")
 
 
 async def send_error_alert(error_message: str) -> None:
-    """Send error notification"""
+    """Send error notification to all registered users"""
     if not is_configured():
+        return
+
+    target_users = _get_target_chat_ids()
+    if not target_users:
         return
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
@@ -290,9 +382,11 @@ async def send_error_alert(error_message: str) -> None:
 Time: {datetime.now().strftime("%Y-%m-%d %H:%M UTC")}
 """
 
-    try:
-        await bot.send_message(
-            chat_id=TELEGRAM_CHAT_ID, text=message, parse_mode=ParseMode.MARKDOWN
-        )
-    except Exception as e:
-        logger.error(f"Failed to send error alert: {e}")
+    for user in target_users:
+        chat_id = user["chat_id"]
+        try:
+            await bot.send_message(
+                chat_id=chat_id, text=message, parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception as e:
+            logger.error(f"Failed to send error alert to {chat_id}: {e}")
