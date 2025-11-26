@@ -7,11 +7,17 @@ dockerfilePath = "Dockerfile"
 
 [deploy]
 startCommand = "python run_scraper.py"
-# Run daily at 2 AM Central Time (8 AM UTC during CDT, 8 AM UTC during CST)
+# Run daily at 6 AM Central Time
 # Wisconsin is in Central Time zone
-# CDT (Mar-Nov): UTC-5, so 2 AM CDT = 7 AM UTC
-# CST (Nov-Mar): UTC-6, so 2 AM CST = 8 AM UTC
-# Using 8 AM UTC to cover CST (winter), will run at 3 AM during CDT (summer)
-cronSchedule = "0 8 * * *"
+# CDT (Mar-Nov): UTC-5, so 6 AM CDT = 11 AM UTC
+# CST (Nov-Mar): UTC-6, so 6 AM CST = 12 PM UTC
+# Using 12:00 UTC to cover CST (winter), will run at 7 AM during CDT (summer)
+cronSchedule = "0 12 * * *"
 # Railway will stop the service after it exits
 restartPolicyType = "NEVER"
+
+# Required environment variables:
+# DATABASE_URL - PostgreSQL connection string
+# RESEND_API_KEY - Resend API key
+# EMAIL_TO - Recipient email address (default: binfaisal.ammar@gmail.com)
+# EMAIL_FROM - Sender email (default: realtor@fullstacktics.com)

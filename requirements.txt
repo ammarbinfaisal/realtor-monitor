@@ -8,17 +8,12 @@ psycopg2-binary>=2.9.0
 # Models
 pydantic>=2.0.0
 
-# API
-fastapi>=0.109.0
-uvicorn[standard]>=0.27.0
-python-multipart>=0.0.6
-
 # Excel export
 openpyxl>=3.1.0
 pandas>=2.0.0
 
-# Telegram
-python-telegram-bot>=21.0
+# Email (Resend)
+resend>=2.0.0
 
 # Async HTTP
 httpx>=0.26.0

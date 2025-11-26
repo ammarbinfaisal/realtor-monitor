@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Main entry point for Railway cron job.
-Runs the scraper, saves to DB, sends Telegram notification.
+Runs the scraper, saves to DB, sends email notification with septic/well listings.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ import sys
 import logging
 import traceback
 from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 # Import the existing scraper
 from scraper_curl import RealtorScraperCurl
@@ -18,31 +19,52 @@ from scraper_curl import RealtorScraperCurl
 # Import new modules
 import db
 from models import Listing, ScraperStats
-import notifier
+import email_notifier
+
+# CST timezone
+CST = ZoneInfo("America/Chicago")
 
 
-def get_24h_window() -> tuple[datetime, datetime]:
+def get_6am_cst_yesterday() -> datetime:
     """
-    Get the 24-hour window for marking listings as "new".
-    Window is from 2am yesterday to 2am today (in UTC).
+    Get yesterday's 6am CST as a datetime object.
+    This is the cutoff for filtering listings by list_date.
 
     Returns:
-        Tuple of (window_start, window_end) in UTC
+        datetime object for 6am CST yesterday
     """
-    now = datetime.now(timezone.utc)
-    # Today at 2am UTC
-    today_2am = now.replace(hour=2, minute=0, second=0, microsecond=0)
+    now = datetime.now(CST)
+    # Yesterday at 6am CST
+    yesterday_6am = (now - timedelta(days=1)).replace(
+        hour=6, minute=0, second=0, microsecond=0
+    )
+    return yesterday_6am
 
-    # If current time is before 2am, the window is from yesterday's 2am to today's 2am
-    # If current time is after 2am, the window is from today's 2am to tomorrow's 2am
-    if now < today_2am:
-        window_end = today_2am
-        window_start = today_2am - timedelta(days=1)
-    else:
-        window_start = today_2am
-        window_end = today_2am + timedelta(days=1)
 
-    return window_start, window_end
+def is_listing_after_cutoff(list_date_str: str | None, cutoff: datetime) -> bool:
+    """
+    Check if a listing's list_date is after the cutoff time.
+
+    Args:
+        list_date_str: List date string in format "YYYY-MM-DD"
+        cutoff: Cutoff datetime
+
+    Returns:
+        True if listing is after cutoff, False otherwise
+    """
+    if not list_date_str:
+        return False
+
+    try:
+        # Parse list_date (format: "2025-01-15")
+        list_date = datetime.strptime(list_date_str, "%Y-%m-%d")
+        # Assume listing is posted at midnight of that day in CST
+        list_date = list_date.replace(tzinfo=CST)
+
+        # Compare with cutoff (6am CST yesterday)
+        return list_date >= cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
+    except ValueError:
+        return False
 
 
 # Configure logging
@@ -56,37 +78,32 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_scraper(days_old: int = 1, mark_new_within_24h: bool = False):
+async def run_scraper(days_old: int = 1):
     """
     Main scraper function for Railway cron.
 
     1. Scrapes listings from Realtor.com
     2. Saves to PostgreSQL database
-    3. Sends Telegram notification with new septic/well listings
-    4. Sends XLSX with all listings
+    3. Filters listings with list_date after 6am CST yesterday
+    4. Sends email with Excel of septic/well listings
 
     Args:
         days_old: Number of days to look back for listings (default: 1)
-        mark_new_within_24h: If True, only mark listings as "new" if they fall
-                            within the 2am-to-2am 24h window. Used for 7-day
-                            history scrapes to avoid marking old listings as new.
     """
     stats = ScraperStats(started_at=datetime.utcnow())
     all_listings: list[Listing] = []
-    new_septic_well_listings: list[Listing] = []
+    septic_well_listings: list[Listing] = []
 
-    # Get the 24h window if we need to filter what's marked as "new"
-    window_start, window_end = None, None
-    if mark_new_within_24h:
-        window_start, window_end = get_24h_window()
-        logger.info(f"24h window for 'new' listings: {window_start} to {window_end}")
+    # Get cutoff time: 6am CST yesterday
+    cutoff_time = get_6am_cst_yesterday()
+    logger.info(
+        f"Filtering listings with list_date after: {cutoff_time.strftime('%Y-%m-%d %H:%M %Z')}"
+    )
 
     try:
         logger.info("=" * 60)
         logger.info("Starting Realtor Scraper (Railway Cron)")
         logger.info(f"Looking back {days_old} day(s)")
-        if mark_new_within_24h:
-            logger.info("Only marking listings within 24h window as new")
         logger.info("=" * 60)
 
         # Initialize database
@@ -165,41 +182,23 @@ async def run_scraper(days_old: int = 1, mark_new_within_24h: bool = False):
 
                 if is_new:
                     stats.new_listings += 1
-
-                    # Determine if this listing should be considered "new" for notifications
-                    # When mark_new_within_24h is True, only count listings whose list_date
-                    # falls within the 24h window (2am yesterday to 2am today)
-                    should_notify = True
-                    if mark_new_within_24h and window_start and window_end:
-                        list_date_str = result_dict.get("list_date")
-                        if list_date_str:
-                            try:
-                                # Parse list_date (format: "2025-01-15")
-                                list_date = datetime.strptime(list_date_str, "%Y-%m-%d")
-                                list_date = list_date.replace(tzinfo=timezone.utc)
-                                # Only notify if listing date is within the 24h window
-                                should_notify = window_start <= list_date < window_end
-                                if not should_notify:
-                                    logger.debug(
-                                        f"Listing {listing.address} list_date {list_date_str} "
-                                        f"outside 24h window, not marking as new for notification"
-                                    )
-                            except ValueError:
-                                # If we can't parse the date, include it to be safe
-                                should_notify = True
-
-                    # Track new septic/well listings for notification
-                    if should_notify and (
-                        listing.has_septic_system or listing.has_private_well
-                    ):
-                        new_septic_well_listings.append(saved_listing)
-                        stats.septic_well_count += 1
-                        logger.info(
-                            f"NEW SEPTIC/WELL: {listing.address}, {listing.city} "
-                            f"(Septic: {listing.has_septic_system}, Well: {listing.has_private_well})"
-                        )
                 else:
                     stats.updated_listings += 1
+
+                # Check if listing has septic/well AND is after cutoff time
+                list_date_str = result_dict.get("list_date")
+                is_after_cutoff = is_listing_after_cutoff(list_date_str, cutoff_time)
+
+                if is_after_cutoff and (
+                    listing.has_septic_system or listing.has_private_well
+                ):
+                    septic_well_listings.append(saved_listing)
+                    stats.septic_well_count += 1
+                    logger.info(
+                        f"SEPTIC/WELL MATCH: {listing.address}, {listing.city} "
+                        f"(Septic: {listing.has_septic_system}, Well: {listing.has_private_well}) "
+                        f"[list_date: {list_date_str}]"
+                    )
 
                 # Progress logging
                 if (i + 1) % 50 == 0 or (i + 1) == len(api_listings):
@@ -220,18 +219,17 @@ async def run_scraper(days_old: int = 1, mark_new_within_24h: bool = False):
         logger.info(f"Total processed: {stats.total_processed}")
         logger.info(f"New listings: {stats.new_listings}")
         logger.info(f"Updated: {stats.updated_listings}")
-        logger.info(f"New Septic/Well: {stats.septic_well_count}")
+        logger.info(f"Septic/Well matches (after cutoff): {stats.septic_well_count}")
         logger.info(f"Duration: {stats.duration_seconds:.1f}s")
         logger.info("=" * 60)
 
-        # Send Telegram notification
-        await notifier.send_scrape_report(
+        # Send email notification with Excel of septic/well listings
+        await email_notifier.send_scrape_report(
             stats=stats,
-            all_listings=all_listings,
-            new_septic_well_listings=new_septic_well_listings,
+            septic_well_listings=septic_well_listings,
         )
 
-        logger.info("Telegram notification sent")
+        logger.info("Email notification sent")
 
     except Exception as e:
         logger.error(f"Scraper failed: {e}")
@@ -240,7 +238,7 @@ async def run_scraper(days_old: int = 1, mark_new_within_24h: bool = False):
         stats.completed_at = datetime.utcnow()
 
         # Send error notification
-        await notifier.send_error_alert(
+        await email_notifier.send_error_alert(
             f"Scraper failed:\n{str(e)}\n\n{traceback.format_exc()}"
         )
 

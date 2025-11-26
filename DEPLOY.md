@@ -1,6 +1,6 @@
-# Railway Deployment Guide
+# Deployment Guide
 
-## Architecture
+## Architecture (Cost-Optimized)
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
@@ -21,10 +21,10 @@
 │                                 ▲                              │
 │                                 │                              │
 │  ┌──────────────────────────────┴───────────────────────────┐  │
-│  │  API Service (Always On)                                 │  │
-│  │  - REST API                                              │  │
-│  │  - WebSocket for real-time                               │  │
-│  │  - Web frontend                                          │  │
+│  │  API Service (Serverless/Scale-to-Zero)                  │  │
+│  │  - REST API + Static frontend                            │  │
+│  │  - Sleeps after 10 mins of inactivity                    │  │
+│  │  - Wakes on first request (~5-10s cold start)            │  │
 │  └──────────────────────────────────────────────────────────┘  │
 └─────────────────────────────────────────────────────────────────┘
 ```
@@ -104,7 +104,21 @@ To link PostgreSQL to both services:
 2. Go to "Variables"
 3. Click "Add Reference" on each service
 
-### 6. Verify Deployment
+### 6. Enable Serverless (Scale-to-Zero)
+
+To reduce costs, enable serverless mode for the API:
+
+1. Go to Railway dashboard
+2. Click on your API service
+3. Go to **Settings** → **Deploy**
+4. Enable **"Serverless"** toggle (may be called "App Sleeping")
+5. The service will now:
+   - Sleep after 10 minutes of no outbound traffic
+   - Wake automatically on first request (~5-10s cold start)
+
+**Note:** The frontend handles cold starts gracefully by showing "Starting API..." after 3 seconds of waiting.
+
+### 7. Verify Deployment
 
 ```bash
 # Check API health
@@ -116,6 +130,12 @@ curl https://your-api.up.railway.app/api/stats
 # Trigger manual scrape (for testing)
 railway run python run_scraper.py
 ```
+
+**Test the full flow:**
+1. Visit your Railway app URL
+2. First load may show "Starting API..." (cold start)
+3. After ~5-10s, data should load
+4. Subsequent requests are fast while API is warm
 
 ## Environment Variables
 
@@ -163,14 +183,22 @@ You'll receive:
 - **XLSX attachment**: All listings from the scrape
 - **Error alerts**: If scraper fails
 
-## Cost Estimate (Hobby Plan - $5/mo)
+## Cost Estimate (Serverless Setup)
 
 | Component | Est. Usage | Cost |
 |-----------|------------|------|
 | Scraper (4x/day, ~5min each) | ~10 hrs/mo | ~$0.50 |
-| API (always on, minimal) | ~720 hrs/mo | ~$2-3 |
+| API (serverless, on-demand) | ~5-20 hrs/mo | ~$0.25-1.00 |
 | PostgreSQL (1GB) | Storage | ~$1 |
-| **Total** | | **~$4-5/mo** |
+| **Total** | | **~$2-3/mo** |
+
+### Cost Savings vs Always-On
+
+| Setup | Monthly Cost |
+|-------|--------------|
+| Always-on API | ~$4-5/mo |
+| Serverless API | ~$2-3/mo |
+| **Savings** | **~50%** |
 
 ## Troubleshooting
 

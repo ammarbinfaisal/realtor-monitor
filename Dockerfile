@@ -32,12 +32,10 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 # Copy application code
 COPY models.py .
 COPY db.py .
-COPY notifier.py .
+COPY email_notifier.py .
 COPY scraper_curl.py .
 COPY run_scraper.py .
-COPY api.py .
-COPY static/ ./static/
 COPY migrations/ ./migrations/
 
-# Default command (overridden by railway.toml for each service)
-CMD ["python", "api.py"]
+# Default command - run the scraper
+CMD ["python", "run_scraper.py"]
