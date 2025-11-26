@@ -292,11 +292,11 @@ def send_debug_email(
         logger.warning("RESEND_API_KEY not configured, cannot send debug email")
         return False
 
-    # Determine recipient
-    recipients = [DEBUG_EMAIL_TO] if DEBUG_EMAIL_TO else EMAIL_TO
-    if not recipients:
-        logger.warning("No email recipients configured (DEBUG_EMAIL_TO or EMAIL_TO)")
+    # Debug emails must use DEBUG_EMAIL_TO only
+    if not DEBUG_EMAIL_TO:
+        logger.error("DEBUG_EMAIL_TO not configured, cannot send debug email")
         return False
+    recipients = [DEBUG_EMAIL_TO]
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M CST")
     from_str = from_time.strftime("%Y-%m-%d %H:%M %Z")

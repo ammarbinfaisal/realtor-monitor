@@ -31,11 +31,13 @@ COPY --from=builder /usr/local/bin /usr/local/bin
 
 # Copy application code
 COPY models.py .
+COPY orm.py .
 COPY db.py .
 COPY email_notifier.py .
 COPY scraper_curl.py .
 COPY run_scraper.py .
-COPY migrations/ ./migrations/
+COPY alembic.ini .
+COPY alembic/ ./alembic/
 
 # Default command - run the scraper
 CMD ["python", "run_scraper.py"]

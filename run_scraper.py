@@ -51,7 +51,8 @@ def is_listing_in_window(
     Check if a listing's list_date falls within the 6am window.
 
     Args:
-        list_date_str: List date string in format "YYYY-MM-DD"
+        list_date_str: List date string - can be ISO format "2025-01-15T16:30:48.000000Z"
+                       or simple "YYYY-MM-DD"
         from_time: Start of window (yesterday 6am CST)
         to_time: End of window (today 6am CST)
 
@@ -62,17 +63,18 @@ def is_listing_in_window(
         return False
 
     try:
-        # Parse list_date (format: "2025-01-15")
-        list_date = datetime.strptime(list_date_str, "%Y-%m-%d")
-        # Assume listing is posted at midnight of that day in CST
-        list_date = list_date.replace(tzinfo=CST)
+        # Try ISO format first (e.g., "2025-01-15T16:30:48.000000Z")
+        if "T" in list_date_str:
+            list_date = datetime.fromisoformat(list_date_str.replace("Z", "+00:00"))
+            # Convert to CST for comparison
+            list_date = list_date.astimezone(CST)
+        else:
+            # Fall back to simple date format (e.g., "2025-01-15")
+            list_date = datetime.strptime(list_date_str, "%Y-%m-%d")
+            list_date = list_date.replace(tzinfo=CST)
 
-        # Get date boundaries from the window
-        from_date = from_time.replace(hour=0, minute=0, second=0, microsecond=0)
-        to_date = to_time.replace(hour=0, minute=0, second=0, microsecond=0)
-
-        # Include listings from yesterday's date and today's date
-        return from_date <= list_date <= to_date
+        # Compare with the 6am window directly
+        return from_time <= list_date <= to_time
     except ValueError:
         return False
 
@@ -302,7 +304,10 @@ def main():
         if debug_email:
             logger.info(f"Debug mode: will send to DEBUG_EMAIL_TO: {debug_email}")
         else:
-            logger.warning("DEBUG_EMAIL_TO not set, will use EMAIL_TO")
+            logger.error(
+                "DEBUG_EMAIL_TO not set. Manual runs require DEBUG_EMAIL_TO to be configured."
+            )
+            sys.exit(1)
 
     asyncio.run(run_scraper(days_old=args.days, debug_mode=args.debug))
 
