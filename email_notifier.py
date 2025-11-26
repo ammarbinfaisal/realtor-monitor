@@ -23,7 +23,9 @@ logger = logging.getLogger(__name__)
 
 # Resend configuration from environment variables
 RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
-EMAIL_TO = os.environ.get("EMAIL_TO", "binfaisal.ammar@gmail.com")
+EMAIL_TO_RAW = os.environ.get("EMAIL_TO", "binfaisal.ammar@gmail.com")
+# Parse comma-separated list of emails, stripping whitespace
+EMAIL_TO = [email.strip() for email in EMAIL_TO_RAW.split(",") if email.strip()]
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "realtor@fullstacktics.com")
 
 
@@ -129,7 +131,7 @@ def send_email_with_attachment(
         # Build email params
         email_params: dict = {
             "from": EMAIL_FROM,
-            "to": [EMAIL_TO],
+            "to": EMAIL_TO,
             "subject": subject,
             "text": body,
         }
@@ -150,7 +152,7 @@ def send_email_with_attachment(
         response = resend.Emails.send(email_params)
 
         logger.info(
-            f"Email sent successfully to {EMAIL_TO}, id: {response.get('id', 'unknown')}"
+            f"Email sent successfully to {', '.join(EMAIL_TO)}, id: {response.get('id', 'unknown')}"
         )
         return True
 
