@@ -2,11 +2,17 @@
 """
 Main entry point for Railway cron job.
 Runs the scraper, saves to DB, sends email notification with septic/well listings.
+
+Usage:
+    python run_scraper.py          # Normal cron run
+    python run_scraper.py --debug  # Debug run (loads .env, uses DEBUG_EMAIL_TO)
 """
 
 from __future__ import annotations
 
+import argparse
 import asyncio
+import os
 import sys
 import logging
 import traceback
@@ -25,32 +31,32 @@ import email_notifier
 CST = ZoneInfo("America/Chicago")
 
 
-def get_6am_cst_yesterday() -> datetime:
+def get_6am_window() -> tuple[datetime, datetime]:
     """
-    Get yesterday's 6am CST as a datetime object.
-    This is the cutoff for filtering listings by list_date.
+    Get the 6am CST window: yesterday 6am to today 6am.
 
     Returns:
-        datetime object for 6am CST yesterday
+        Tuple of (from_time, to_time) - yesterday 6am CST to today 6am CST
     """
     now = datetime.now(CST)
-    # Yesterday at 6am CST
-    yesterday_6am = (now - timedelta(days=1)).replace(
-        hour=6, minute=0, second=0, microsecond=0
-    )
-    return yesterday_6am
+    today_6am = now.replace(hour=6, minute=0, second=0, microsecond=0)
+    yesterday_6am = today_6am - timedelta(days=1)
+    return yesterday_6am, today_6am
 
 
-def is_listing_after_cutoff(list_date_str: str | None, cutoff: datetime) -> bool:
+def is_listing_in_window(
+    list_date_str: str | None, from_time: datetime, to_time: datetime
+) -> bool:
     """
-    Check if a listing's list_date is after the cutoff time.
+    Check if a listing's list_date falls within the 6am window.
 
     Args:
         list_date_str: List date string in format "YYYY-MM-DD"
-        cutoff: Cutoff datetime
+        from_time: Start of window (yesterday 6am CST)
+        to_time: End of window (today 6am CST)
 
     Returns:
-        True if listing is after cutoff, False otherwise
+        True if listing is within window, False otherwise
     """
     if not list_date_str:
         return False
@@ -61,8 +67,12 @@ def is_listing_after_cutoff(list_date_str: str | None, cutoff: datetime) -> bool
         # Assume listing is posted at midnight of that day in CST
         list_date = list_date.replace(tzinfo=CST)
 
-        # Compare with cutoff (6am CST yesterday)
-        return list_date >= cutoff.replace(hour=0, minute=0, second=0, microsecond=0)
+        # Get date boundaries from the window
+        from_date = from_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        to_date = to_time.replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Include listings from yesterday's date and today's date
+        return from_date <= list_date <= to_date
     except ValueError:
         return False
 
@@ -78,26 +88,27 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
-async def run_scraper(days_old: int = 1):
+async def run_scraper(days_old: int = 1, debug_mode: bool = False):
     """
     Main scraper function for Railway cron.
 
     1. Scrapes listings from Realtor.com
     2. Saves to PostgreSQL database
-    3. Filters listings with list_date after 6am CST yesterday
+    3. Filters listings with list_date in 6am-6am window (yesterday to today)
     4. Sends email with Excel of septic/well listings
 
     Args:
         days_old: Number of days to look back for listings (default: 1)
+        debug_mode: If True, send to DEBUG_EMAIL_TO instead of EMAIL_TO
     """
     stats = ScraperStats(started_at=datetime.utcnow())
     all_listings: list[Listing] = []
     septic_well_listings: list[Listing] = []
 
-    # Get cutoff time: 6am CST yesterday
-    cutoff_time = get_6am_cst_yesterday()
+    # Get 6am window: yesterday 6am CST to today 6am CST
+    from_time, to_time = get_6am_window()
     logger.info(
-        f"Filtering listings with list_date after: {cutoff_time.strftime('%Y-%m-%d %H:%M %Z')}"
+        f"Filtering listings in window: {from_time.strftime('%Y-%m-%d %H:%M %Z')} to {to_time.strftime('%Y-%m-%d %H:%M %Z')}"
     )
 
     try:
@@ -185,11 +196,11 @@ async def run_scraper(days_old: int = 1):
                 else:
                     stats.updated_listings += 1
 
-                # Check if listing has septic/well AND is after cutoff time
+                # Check if listing has septic/well AND is in the 6am window
                 list_date_str = result_dict.get("list_date")
-                is_after_cutoff = is_listing_after_cutoff(list_date_str, cutoff_time)
+                is_in_window = is_listing_in_window(list_date_str, from_time, to_time)
 
-                if is_after_cutoff and (
+                if is_in_window and (
                     listing.has_septic_system or listing.has_private_well
                 ):
                     septic_well_listings.append(saved_listing)
@@ -219,15 +230,21 @@ async def run_scraper(days_old: int = 1):
         logger.info(f"Total processed: {stats.total_processed}")
         logger.info(f"New listings: {stats.new_listings}")
         logger.info(f"Updated: {stats.updated_listings}")
-        logger.info(f"Septic/Well matches (after cutoff): {stats.septic_well_count}")
+        logger.info(f"Septic/Well matches (in window): {stats.septic_well_count}")
         logger.info(f"Duration: {stats.duration_seconds:.1f}s")
         logger.info("=" * 60)
 
         # Send email notification with Excel of septic/well listings
-        await email_notifier.send_scrape_report(
-            stats=stats,
-            septic_well_listings=septic_well_listings,
-        )
+        if debug_mode:
+            # Debug mode: use send_debug_email which respects DEBUG_EMAIL_TO
+            logger.info("Debug mode: sending to DEBUG_EMAIL_TO")
+            email_notifier.send_debug_email(septic_well_listings, from_time, to_time)
+        else:
+            # Normal mode: send regular report
+            await email_notifier.send_scrape_report(
+                stats=stats,
+                septic_well_listings=septic_well_listings,
+            )
 
         logger.info("Email notification sent")
 
@@ -249,8 +266,45 @@ async def run_scraper(days_old: int = 1):
 
 
 def main():
-    """Sync entry point"""
-    asyncio.run(run_scraper())
+    """Sync entry point with CLI argument parsing"""
+    # Always try to load .env file (for local development)
+    # In production (Railway), env vars are set directly so this is a no-op
+    from dotenv import load_dotenv
+
+    if load_dotenv():
+        logger.info("Loaded .env file")
+        # Reload email_notifier config after .env is loaded
+        email_notifier.RESEND_API_KEY = os.environ.get("RESEND_API_KEY", "")
+        email_to_raw = os.environ.get("EMAIL_TO", "binfaisal.ammar@gmail.com")
+        email_notifier.EMAIL_TO = [
+            e.strip() for e in email_to_raw.split(",") if e.strip()
+        ]
+        email_notifier.DEBUG_EMAIL_TO = os.environ.get("DEBUG_EMAIL_TO", "")
+
+    parser = argparse.ArgumentParser(
+        description="Realtor scraper - scrapes listings and sends email reports"
+    )
+    parser.add_argument(
+        "--debug",
+        action="store_true",
+        help="Debug mode: sends email to DEBUG_EMAIL_TO instead of EMAIL_TO",
+    )
+    parser.add_argument(
+        "--days",
+        type=int,
+        default=1,
+        help="Number of days to look back for listings (default: 1)",
+    )
+    args = parser.parse_args()
+
+    if args.debug:
+        debug_email = email_notifier.DEBUG_EMAIL_TO
+        if debug_email:
+            logger.info(f"Debug mode: will send to DEBUG_EMAIL_TO: {debug_email}")
+        else:
+            logger.warning("DEBUG_EMAIL_TO not set, will use EMAIL_TO")
+
+    asyncio.run(run_scraper(days_old=args.days, debug_mode=args.debug))
 
 
 if __name__ == "__main__":

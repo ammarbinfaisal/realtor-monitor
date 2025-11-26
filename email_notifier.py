@@ -2,6 +2,11 @@
 Email notification service for Realtor scraper using Resend.
 
 Sends Excel file with septic/well matched listings to configured email address.
+
+For debug/manual trigger, use run_scraper.py:
+    python run_scraper.py --debug
+
+This runs the full scraper and sends email to DEBUG_EMAIL_TO.
 """
 
 from __future__ import annotations
@@ -27,6 +32,8 @@ EMAIL_TO_RAW = os.environ.get("EMAIL_TO", "binfaisal.ammar@gmail.com")
 # Parse comma-separated list of emails, stripping whitespace
 EMAIL_TO = [email.strip() for email in EMAIL_TO_RAW.split(",") if email.strip()]
 EMAIL_FROM = os.environ.get("EMAIL_FROM", "realtor@fullstacktics.com")
+# Debug email recipient (for manual trigger testing)
+DEBUG_EMAIL_TO = os.environ.get("DEBUG_EMAIL_TO", "")
 
 
 def is_configured() -> bool:
@@ -263,3 +270,116 @@ Error:
 """
 
     send_email_with_attachment(subject=subject, body=body)
+
+
+def send_debug_email(
+    listings: list[Listing], from_time: datetime, to_time: datetime
+) -> bool:
+    """
+    Send a debug email with septic/well listings from a specific time window.
+
+    Uses DEBUG_EMAIL_TO if set, otherwise falls back to EMAIL_TO.
+
+    Args:
+        listings: List of septic/well listings to include
+        from_time: Start of the time window
+        to_time: End of the time window
+
+    Returns:
+        True if email sent successfully, False otherwise
+    """
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured, cannot send debug email")
+        return False
+
+    # Determine recipient
+    recipients = [DEBUG_EMAIL_TO] if DEBUG_EMAIL_TO else EMAIL_TO
+    if not recipients:
+        logger.warning("No email recipients configured (DEBUG_EMAIL_TO or EMAIL_TO)")
+        return False
+
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M CST")
+    from_str = from_time.strftime("%Y-%m-%d %H:%M %Z")
+    to_str = to_time.strftime("%Y-%m-%d %H:%M %Z")
+
+    subject = f"[DEBUG] Realtor Scraper - {len(listings)} Septic/Well Listings"
+
+    body = f"""DEBUG Email - Manual Trigger
+{timestamp}
+
+=== Time Window ===
+From: {from_str}
+To: {to_str}
+
+=== Septic/Well Listings ===
+Found: {len(listings)} listings with septic system or private well
+
+"""
+
+    if listings:
+        body += "Listings:\n"
+        for listing in listings[:10]:
+            price_str = f"${listing.price:,}" if listing.price else "N/A"
+            features = []
+            if listing.has_septic_system:
+                features.append("SEPTIC")
+            if listing.has_private_well:
+                features.append("WELL")
+
+            body += f"\n- {listing.address}, {listing.city}\n"
+            body += (
+                f"  {price_str} | {listing.beds or '-'}bd/{listing.baths or '-'}ba\n"
+            )
+            body += f"  [{' | '.join(features)}] | List Date: {listing.list_date}\n"
+            body += f"  {listing.listing_url}\n"
+
+        if len(listings) > 10:
+            body += f"\n... and {len(listings) - 10} more in the attached Excel file.\n"
+
+        body += "\nSee attached Excel file for complete list with all details.\n"
+    else:
+        body += "No septic/well listings found in this time window.\n"
+
+    # Generate Excel attachment
+    attachment_buffer = None
+    attachment_filename = None
+
+    if listings:
+        attachment_buffer, attachment_filename = generate_septic_well_xlsx(listings)
+        # Override filename to indicate debug
+        attachment_filename = (
+            f"debug_{attachment_filename}" if attachment_filename else None
+        )
+
+    # Send email with custom recipient
+    try:
+        resend.api_key = RESEND_API_KEY
+
+        email_params: dict = {
+            "from": EMAIL_FROM,
+            "to": recipients,
+            "subject": subject,
+            "text": body,
+        }
+
+        if attachment_buffer and attachment_filename:
+            attachment_content = base64.b64encode(attachment_buffer.read()).decode(
+                "utf-8"
+            )
+            email_params["attachments"] = [
+                {
+                    "filename": attachment_filename,
+                    "content": attachment_content,
+                }
+            ]
+
+        response = resend.Emails.send(email_params)
+
+        logger.info(
+            f"Debug email sent successfully to {', '.join(recipients)}, id: {response.get('id', 'unknown')}"
+        )
+        return True
+
+    except Exception as e:
+        logger.error(f"Failed to send debug email: {e}")
+        return False

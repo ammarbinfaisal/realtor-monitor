@@ -433,3 +433,38 @@ def get_telegram_user_count() -> tuple[int, int]:
         """)
         row = cursor.fetchone()
         return (row["active"] or 0, row["total"] or 0) if row else (0, 0)
+
+
+def get_septic_well_listings_in_window(
+    from_time: datetime, to_time: datetime
+) -> list[Listing]:
+    """
+    Get listings with septic/well that have list_date within the specified window.
+
+    Args:
+        from_time: Start of window (inclusive)
+        to_time: End of window (exclusive)
+
+    Returns:
+        List of Listing objects with septic or well
+    """
+    with get_connection() as conn:
+        cursor = conn.cursor()
+
+        # Convert datetime to date strings for comparison with list_date (YYYY-MM-DD format)
+        from_date = from_time.strftime("%Y-%m-%d")
+        to_date = to_time.strftime("%Y-%m-%d")
+
+        cursor.execute(
+            """
+            SELECT * FROM listings 
+            WHERE (has_septic_system = true OR has_private_well = true)
+            AND list_date IS NOT NULL
+            AND list_date >= %s
+            AND list_date <= %s
+            ORDER BY list_date DESC, first_seen_at DESC
+        """,
+            (from_date, to_date),
+        )
+
+        return [Listing.from_db_row(dict(row)) for row in cursor.fetchall()]
