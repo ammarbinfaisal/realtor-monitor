@@ -251,17 +251,37 @@ Found: {len(septic_well_listings)} listings with septic system or private well
     )
 
 
-async def send_error_alert(error_message: str) -> None:
-    """Send error notification via email"""
-    if not is_configured():
+async def send_error_alert(error_message: str, debug_mode: bool = False) -> None:
+    """Send error notification via email.
+    
+    Args:
+        error_message: The error message to send
+        debug_mode: If True, send to DEBUG_EMAIL_TO instead of EMAIL_TO
+    """
+    if not RESEND_API_KEY:
+        logger.warning("RESEND_API_KEY not configured, cannot send error alert")
         return
+
+    # Determine recipients based on debug_mode
+    if debug_mode:
+        if not DEBUG_EMAIL_TO:
+            logger.warning("DEBUG_EMAIL_TO not configured, skipping error alert in debug mode")
+            return
+        recipients = [DEBUG_EMAIL_TO]
+        subject_prefix = "[DEBUG] "
+    else:
+        if not EMAIL_TO:
+            logger.warning("EMAIL_TO not configured, skipping error alert")
+            return
+        recipients = EMAIL_TO
+        subject_prefix = ""
 
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M CST")
 
     # Truncate long errors
     error_text = error_message[:2000] if len(error_message) > 2000 else error_message
 
-    subject = "Realtor Scraper Error Alert"
+    subject = f"{subject_prefix}Realtor Scraper Error Alert"
     body = f"""Scraper Error Alert
 {timestamp}
 
@@ -269,7 +289,24 @@ Error:
 {error_text}
 """
 
-    send_email_with_attachment(subject=subject, body=body)
+    try:
+        resend.api_key = RESEND_API_KEY
+
+        email_params: dict = {
+            "from": EMAIL_FROM,
+            "to": recipients,
+            "subject": subject,
+            "text": body,
+        }
+
+        response = resend.Emails.send(email_params)
+
+        logger.info(
+            f"Error alert sent successfully to {', '.join(recipients)}, id: {response.get('id', 'unknown')}"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to send error alert: {e}")
 
 
 def send_debug_email(

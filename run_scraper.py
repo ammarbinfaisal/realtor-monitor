@@ -103,7 +103,7 @@ async def run_scraper(days_old: int = 1, debug_mode: bool = False):
         days_old: Number of days to look back for listings (default: 1)
         debug_mode: If True, send to DEBUG_EMAIL_TO instead of EMAIL_TO
     """
-    stats = ScraperStats(started_at=datetime.utcnow())
+    stats = ScraperStats(started_at=datetime.now(timezone.utc))
     all_listings: list[Listing] = []
     septic_well_listings: list[Listing] = []
 
@@ -224,7 +224,7 @@ async def run_scraper(days_old: int = 1, debug_mode: bool = False):
         # Close async session
         await scraper.close_async_session()
 
-        stats.completed_at = datetime.utcnow()
+        stats.completed_at = datetime.now(timezone.utc)
 
         # Log summary
         logger.info("=" * 60)
@@ -254,11 +254,12 @@ async def run_scraper(days_old: int = 1, debug_mode: bool = False):
         logger.error(f"Scraper failed: {e}")
         logger.error(traceback.format_exc())
         stats.errors.append(str(e))
-        stats.completed_at = datetime.utcnow()
+        stats.completed_at = datetime.now(timezone.utc)
 
-        # Send error notification
+        # Send error notification (respects debug_mode)
         await email_notifier.send_error_alert(
-            f"Scraper failed:\n{str(e)}\n\n{traceback.format_exc()}"
+            f"Scraper failed:\n{str(e)}\n\n{traceback.format_exc()}",
+            debug_mode=debug_mode,
         )
 
         sys.exit(1)
